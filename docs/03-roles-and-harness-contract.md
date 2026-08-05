@@ -124,6 +124,32 @@ findings:
 verdict: approved | changes_required
 ```
 
+## Near future: structured tracking content per role (not built yet)
+
+The schemas above are the *routing* contract — the minimum a role must
+produce for the state machine to decide where to go next (a verdict
+enum, a diff). They are deliberately terse: `dispute` needs reasoning
+text, not a paragraph the router has to parse.
+
+Separately, and not yet built: each role's output should also carry
+structured *narrative* content, meant for a human reading the Run's
+external trace (01-run-state-machine.md's mirrored-transitions note),
+not for routing. Framing, not a finalized schema:
+
+- **Planner:** assessment of the task, the plan/slices it's broken into,
+  impact analysis (what areas of the codebase/system this touches).
+- **Coder:** assessment of the change, root-cause analysis (when
+  responding to a review finding or a failing test), what actually
+  changed and why, how to test it.
+- **Reviewer:** similar in spirit — assessment behind each finding, not
+  just the finding itself.
+
+This is additive to the routing schemas above, not a replacement — a
+harness adapter would populate both from the same call, same as today's
+`findings`/`verdict` split for the Reviewer. Deferred until the tracking
+mirror itself (01-run-state-machine.md) gets built, since there's no
+external surface yet for this content to land on.
+
 ## Adding a new role/harness
 
 To add a new harness to the factory:

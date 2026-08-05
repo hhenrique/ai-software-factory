@@ -275,6 +275,17 @@ fail before any model call — this is the raw feed for Overview
 aggregation (time-to-green, cost-per-Run, agent-step token ratio; see
 04-control-plane-mvp-scope.md).
 
+**Near future, not built yet:** every state transition should also be
+mirrored into whatever tool the Task's source integrates with — e.g. a
+comment on the originating GitHub issue/PR — not just the internal
+projection store. The projection store remains the source of truth (it's
+what Overview aggregates from and what a Run's trace/replay is built on);
+the external mirror is for a human tracking the work from wherever they
+already live, not a second store. See 03-roles-and-harness-contract.md's
+matching note on what each role's recorded content should actually
+contain, since "record every transition" and "record something worth
+reading" are different bars.
+
 ## Resuming or cancelling a REVIEW_PENDING Run
 
 Doc 05's signal-wait needs a payload contract; this is it, at the domain
