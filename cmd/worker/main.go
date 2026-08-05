@@ -1,6 +1,12 @@
 // Command worker connects to Temporal, registers the generic conductor
 // workflow plus the tool/harness Activities, and blocks processing tasks
-// on one task queue until interrupted.
+// on one task queue until interrupted. It also registers
+// conductor.record_event (internal/eventlog), which RunWorkflow calls
+// directly after every step transition to persist a structured event into
+// the control plane's projection store (docs/01, docs/04's "Smoke-test
+// strategy"/"Worktree storage" sections) — the foundation any future
+// Overview read surface projects from, not something a Workflow
+// Definition step declares.
 //
 // Activity registration is stub.Registrations (every Activity) with the
 // real implementations layered on top — worktree.create
@@ -32,6 +38,7 @@ import (
 	"factory/internal/activities/stub"
 	"factory/internal/activities/verify"
 	"factory/internal/conductor"
+	"factory/internal/eventlog"
 	"factory/internal/repoconfig"
 	"factory/internal/temporalconn"
 )
@@ -52,6 +59,20 @@ func main() {
 	}
 	defer c.Close()
 
+	// The projection store (internal/eventlog) — a third database in the
+	// same shared Postgres instance Temporal uses (doc 05), never
+	// Temporal's own execution history. No bounded-retry dial needed here
+	// the way temporalconn.DialWithRetry is for Temporal: pgxpool connects
+	// lazily, so a not-yet-ready Postgres just means the first
+	// record-event call retries (eventAO's RetryPolicy in
+	// conductor/workflow.go), not a startup failure.
+	eventPool, err := eventlog.NewPool(ctx)
+	if err != nil {
+		log.Fatalf("worker: unable to configure projection store connection: %v", err)
+	}
+	defer eventPool.Close()
+	eventActivities := &eventlog.Activities{Pool: eventPool}
+
 	w := worker.New(c, taskQueue, worker.Options{})
 	w.RegisterWorkflow(conductor.RunWorkflow)
 
@@ -68,6 +89,7 @@ func main() {
 		gitActivities.Registrations(),
 		verifyActivities.Registrations(),
 		prActivities.Registrations(),
+		eventActivities.Registrations(),
 	}
 	if os.Getenv("FACTORY_STUB_HARNESS_INVOKE") == "" {
 		real = append(real, harnessActivities.Registrations())

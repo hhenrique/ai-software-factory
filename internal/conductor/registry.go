@@ -8,6 +8,13 @@ import "factory/internal/workflowdef"
 // ActivityInput.Harness is already pre-wired for it.
 const HarnessInvokeActivityName = "harness.invoke"
 
+// RecordEventActivityName is the Activity RunWorkflow calls directly (not
+// via activityNameFor's step dispatch — this isn't a Workflow Definition
+// step, it's conductor-internal infrastructure) after every step
+// transition, to persist a structured event (docs/01: "every state
+// transition emits a structured event"). See internal/eventlog.
+const RecordEventActivityName = "conductor.record_event"
+
 // activityNameFor maps a step to the Temporal Activity name that executes
 // it: a tool step's own action identifier (e.g. "worktree.create"), or
 // HarnessInvokeActivityName for every agent step. Doc 05: "the conductor

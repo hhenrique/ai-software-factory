@@ -126,6 +126,28 @@ type ActivityInput struct {
 	RunParams map[string]any
 }
 
+// TransitionEvent is the payload for RecordEventActivityName — one
+// structured record per step transition (docs/01: Task ID, Run ID,
+// from/to-state, timestamp, token delta, tool-calls-made). "State" here
+// is the conductor's step id; see RecordEventActivityName's doc comment
+// for why this isn't a Workflow Definition step.
+type TransitionEvent struct {
+	RunID    string
+	Workflow string
+
+	// FromStep/ToStep are step ids, or "" for FromStep on the very first
+	// event (Run start) and a terminal state name for ToStep on the last.
+	FromStep string
+	ToStep   string
+
+	// StepID is the step whose Activity call produced this transition;
+	// "" for the initial Run-start event, which precedes any Activity call.
+	StepID        string
+	AttemptNumber int
+	TokenDelta    int
+	ActivityCalls int
+}
+
 // ActivityOutput is the normalized output every Activity this package
 // invokes returns.
 type ActivityOutput struct {

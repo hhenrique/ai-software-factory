@@ -48,6 +48,17 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 	}
 	actx := workflow.WithActivityOptions(ctx, ao)
 
+	// A separate, shorter-timeout/retried ActivityOptions for event
+	// recording (docs/01) — telemetry, not the Run's actual work, so it
+	// gets its own small retry budget rather than sharing the main
+	// MaximumAttempts:1 policy above (a transient projection-store
+	// hiccup shouldn't behave like a real step failure).
+	eventAO := workflow.ActivityOptions{
+		StartToCloseTimeout: 10 * time.Second,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
+	}
+	eventActx := workflow.WithActivityOptions(ctx, eventAO)
+
 	// Temporal's own WorkflowExecution.ID is the Run id (doc 05: "Run →
 	// Temporal workflow execution") — no separate RunID field needed on
 	// RunInput.
@@ -64,6 +75,8 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 	budgetTokensSpent := make(map[string]int)
 	budgetHistory := make(map[string][]ActivityOutput)
 	var stepsVisited []string
+
+	recordTransition(eventActx, TransitionEvent{RunID: runID, Workflow: def.Workflow, FromStep: "", ToStep: startID})
 
 	currentID := startID
 	for {
@@ -97,6 +110,10 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 				if err != nil {
 					return RunResult{}, fmt.Errorf("conductor: step %q: budget %q exhausted but %w", step.ID, step.Budget, err)
 				}
+				recordTransition(eventActx, TransitionEvent{
+					RunID: runID, Workflow: def.Workflow, FromStep: step.ID, ToStep: dest,
+					StepID: step.ID, AttemptNumber: attemptNumber,
+				})
 				currentID = dest
 				continue
 			}
@@ -141,6 +158,10 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 			if step.OnMalformedOutput == "" {
 				return RunResult{}, fmt.Errorf("conductor: step %q produced malformed output with no on_malformed_output handler", step.ID)
 			}
+			recordTransition(eventActx, TransitionEvent{
+				RunID: runID, Workflow: def.Workflow, FromStep: step.ID, ToStep: step.OnMalformedOutput,
+				StepID: step.ID, AttemptNumber: attemptNumber, TokenDelta: out.TokensUsed, ActivityCalls: 1,
+			})
 			currentID = step.OnMalformedOutput
 			continue
 		}
@@ -149,7 +170,23 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 		if err != nil {
 			return RunResult{}, err
 		}
+		recordTransition(eventActx, TransitionEvent{
+			RunID: runID, Workflow: def.Workflow, FromStep: step.ID, ToStep: dest,
+			StepID: step.ID, AttemptNumber: attemptNumber, TokenDelta: out.TokensUsed, ActivityCalls: 1,
+		})
 		currentID = dest
+	}
+}
+
+// recordTransition emits one structured event (docs/01) via
+// RecordEventActivityName. Best-effort: a projection-store hiccup
+// recording telemetry must not fail the Run itself, so an error here is
+// logged, not propagated — unlike every step Activity's own errors, which
+// do fail the Run.
+func recordTransition(ctx workflow.Context, ev TransitionEvent) {
+	if err := workflow.ExecuteActivity(ctx, RecordEventActivityName, ev).Get(ctx, nil); err != nil {
+		workflow.GetLogger(ctx).Warn("conductor: failed to record transition event",
+			"error", err, "run_id", ev.RunID, "from_step", ev.FromStep, "to_step", ev.ToStep)
 	}
 }
 

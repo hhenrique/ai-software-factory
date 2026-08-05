@@ -22,6 +22,17 @@ func placeholderActivity(ctx context.Context, in conductor.ActivityInput) (condu
 	return conductor.ActivityOutput{}, nil
 }
 
+// placeholderRecordEvent stands in for RecordEventActivityName, whose
+// signature (TransitionEvent, not ActivityInput/ActivityOutput) differs
+// from every step Activity — recordTransition swallows a call to an
+// unregistered/unmocked activity as a logged warning rather than failing
+// the Run (see workflow.go), so registering this by default means tests
+// succeed because the call actually resolved, not by accident of that
+// error-swallowing.
+func placeholderRecordEvent(ctx context.Context, ev conductor.TransitionEvent) error {
+	return nil
+}
+
 func newTestEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
 	t.Helper()
 	var suite testsuite.WorkflowTestSuite
@@ -38,6 +49,10 @@ func newTestEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
 			DisableAlreadyRegisteredCheck: true,
 		})
 	}
+	env.RegisterActivityWithOptions(placeholderRecordEvent, activity.RegisterOptions{
+		Name:                          conductor.RecordEventActivityName,
+		DisableAlreadyRegisteredCheck: true,
+	})
 	return env
 }
 
@@ -73,6 +88,89 @@ func TestRunWorkflowHappyPath(t *testing.T) {
 	require.Equal(t, "COMPLETED", result.FinalState)
 	require.Equal(t, []string{"provision", "execute", "verify", "merge"}, result.StepsVisited)
 	require.Equal(t, 1, result.BudgetSpent["verify_rounds"])
+	env.AssertExpectations(t)
+}
+
+func TestRunWorkflowRecordsTransitionEvents(t *testing.T) {
+	env := newTestEnv(t)
+	def := mustParseDependencyBumpMinimal(t)
+
+	env.OnActivity("worktree.create", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{}, nil).Once()
+	env.OnActivity(conductor.HarnessInvokeActivityName, mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{TokensUsed: 42}, nil).Once()
+	env.OnActivity("run.tests_lint_build", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Outcome: "pass"}, nil).Once()
+	env.OnActivity("pr.create_and_link", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{}, nil).Once()
+
+	var events []conductor.TransitionEvent
+	env.OnActivity(conductor.RecordEventActivityName, mock.Anything, mock.Anything).
+		Return(func(ctx context.Context, ev conductor.TransitionEvent) error {
+			events = append(events, ev)
+			return nil
+		}).Times(5) // start + provision->execute->verify->merge->COMPLETED
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{Definition: def})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	require.Len(t, events, 5)
+	require.Equal(t, "", events[0].FromStep)
+	require.Equal(t, "provision", events[0].ToStep)
+	require.Equal(t, "dependency-bump-minimal", events[0].Workflow)
+
+	require.Equal(t, "provision", events[1].FromStep)
+	require.Equal(t, "execute", events[1].ToStep)
+
+	require.Equal(t, "execute", events[2].FromStep)
+	require.Equal(t, "verify", events[2].ToStep)
+	require.Equal(t, 42, events[2].TokenDelta, "execute's TokensUsed should flow into its transition event")
+	require.Equal(t, 1, events[2].ActivityCalls)
+
+	require.Equal(t, "verify", events[3].FromStep)
+	require.Equal(t, "merge", events[3].ToStep)
+
+	require.Equal(t, "merge", events[4].FromStep)
+	require.Equal(t, "COMPLETED", events[4].ToStep)
+
+	env.AssertExpectations(t)
+}
+
+func TestRunWorkflowRecordsBudgetExhaustedTransitionWithoutAnActivityCall(t *testing.T) {
+	env := newTestEnv(t)
+	def := mustParseDependencyBumpMinimal(t) // verify_rounds: max_attempts: 2
+
+	env.OnActivity("worktree.create", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{}, nil).Once()
+	env.OnActivity(conductor.HarnessInvokeActivityName, mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{}, nil).Times(3)
+	env.OnActivity("run.tests_lint_build", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Outcome: "fail", Produced: map[string]any{"failing_tests_diff": "boom"}}, nil).
+		Times(2)
+
+	var events []conductor.TransitionEvent
+	env.OnActivity(conductor.RecordEventActivityName, mock.Anything, mock.Anything).
+		Return(func(ctx context.Context, ev conductor.TransitionEvent) error {
+			events = append(events, ev)
+			return nil
+		}).Times(8)
+	// start->provision, provision->execute, execute->verify, verify->revise_verify,
+	// revise_verify->verify, verify->revise_verify, revise_verify->verify,
+	// verify->FAILED (3rd verify entry: budget exhausted, no Activity call)
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{Definition: def})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	last := events[len(events)-1]
+	require.Equal(t, "verify", last.FromStep)
+	require.Equal(t, "FAILED", last.ToStep)
+	require.Equal(t, 0, last.ActivityCalls, "budget-exhausted transition happens without calling the step's Activity")
+	require.Equal(t, 0, last.TokenDelta)
+
 	env.AssertExpectations(t)
 }
 

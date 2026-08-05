@@ -7,11 +7,17 @@ services:
     # Single shared Postgres instance per docs/05: Temporal's own
     # execution-history + visibility databases are separate databases
     # within this instance (auto-setup creates them below), not a second
-    # Postgres container. The future control-plane projection store isn't
-    # built yet — when it exists, add it as a third database in this same
-    # service, not a second Postgres container.
+    # Postgres container. The control plane's projection store is a third
+    # database in this same instance (postgres-init/01-projection-store.sql),
+    # not a second Postgres container.
     volumes:
       - factory-postgres-data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    # eventlog (internal/eventlog) connects directly from the worker
+    # process on the host, not from another container — needs a host port,
+    # unlike temporal's own DB access which stays container-to-container.
+    ports:
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U temporal"]
       interval: 5s
