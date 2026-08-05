@@ -56,6 +56,49 @@ Explicitly deferred: per-repo custom indexing/RAG configuration as a
 control-plane-managed setting — if this already exists as separate
 tooling, reference it, don't rebuild its config surface here.
 
+### Worktree storage
+
+Where a repo's clone and a Run's worktree live on disk is **not** a
+control-plane-managed setting in MVP — it's env/deploy-time
+configuration (`FACTORY_ROOT`, defaulting to `/var/lib/factory`), read
+once by the worker process at startup. Building this as a
+control-plane-editable setting means standing up a real config
+store/API/editor, a large effort relative to the need; defer it until
+enough of the rest of the control plane exists to justify it. The
+implementation sits behind a small `Provider` interface
+(`internal/repoconfig`) precisely so a control-plane-backed
+implementation can replace the env-backed one later without any caller
+changing.
+
+Fixed layout under `FACTORY_ROOT`:
+- `repos/<repo>.git` — the repo's own clone, shared across every Run
+  against it.
+- `worktrees/<repo>/<run-id>` — one isolated `git worktree` checkout per
+  Run (keyed by Run id, never Task id — retries are new Runs, never
+  mutated ones, so each attempt gets its own directory).
+
+Branch naming: every Run's worktree is checked out on `factory/<run-id>`.
+Anchored on Run id, not Task id, because there's no persisted Task entity
+yet (see Work, below) — once there is, this can incorporate the Task id
+too without changing what calls it.
+
+The shared clone's own `refs/heads/*` is reserved exclusively for these
+`factory/<run-id>` branches; the repo's own branches are mirrored into
+`refs/remotes/origin/*` via a scoped fetch refspec instead of directly
+into `refs/heads/*`. This is load-bearing, not incidental: mirroring
+upstream branches into `refs/heads/*` means a routine `fetch --prune`
+(needed so a later Run actually sees new upstream commits) deletes any
+Run's branch that isn't also on the actual remote — prune can't tell "a
+human deleted this upstream" from "this branch only ever existed
+locally." Keeping the two namespaces disjoint means `fetch --prune` can
+never touch a Run's own branch, no matter how many Runs overlap against
+the same repo.
+
+Concurrent access to the shared clone (fetch + worktree add) is
+serialized with a per-repo advisory lock (`flock`, not a "check whether a
+lock file exists" convention — the latter isn't atomic and leaks on a
+crash).
+
 ### Work
 
 The Task backlog / intake.

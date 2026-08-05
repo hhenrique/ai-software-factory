@@ -27,6 +27,22 @@ type RunInput struct {
 	// can deterministically control how many verify attempts fail before
 	// passing — see internal/activities/stub.
 	FailVerifyUntilAttempt int
+
+	// Repo identifies which repository this Run targets — the minimum a
+	// git-backed tool Activity (e.g. worktree.create) needs to reach it.
+	// There's no persisted Repository entity yet (doc 04's Repositories
+	// section is unbuilt), so today this is supplied directly by whatever
+	// starts the Run.
+	Repo Repo
+}
+
+// Repo is a slice of doc 04's Repository entity: just enough to clone and
+// branch against a repo. Threaded from RunInput into every ActivityInput
+// so any tool Activity that needs it doesn't have to re-derive it.
+type Repo struct {
+	Name          string
+	CloneURL      string
+	DefaultBranch string // empty means "resolve from origin/HEAD"
 }
 
 // RunResult is RunWorkflow's return value: the Run's terminal state plus
@@ -36,6 +52,13 @@ type RunResult struct {
 	FinalState   string
 	StepsVisited []string
 	BudgetSpent  map[string]int
+
+	// FinalContext is every Produced field accumulated across the Run's
+	// steps by the time it reached a terminal state — e.g.
+	// worktree.create's worktree_path/branch/clone_dir. Lets a caller
+	// (control plane, tests) inspect real step output without querying
+	// Temporal's raw workflow history.
+	FinalContext map[string]any
 }
 
 // ActivityInput is the normalized input every Activity this package
@@ -56,6 +79,17 @@ type ActivityInput struct {
 	// AttemptNumber is this call's 1-based count within the step's budget
 	// loop (1 if the step has no budget).
 	AttemptNumber int
+
+	// RunID identifies the Run this Activity call belongs to — Temporal's
+	// own WorkflowExecution.ID, which doc 05 maps 1:1 onto a Run. Used to
+	// key per-Run resources (e.g. worktree.create's worktree directory
+	// and branch name) so retries (new Runs, never mutated ones) never
+	// collide with a prior attempt.
+	RunID string
+
+	// Repo identifies which repository this Run targets, copied from
+	// RunInput.Repo.
+	Repo Repo
 
 	// RunParams carries Run-level parameters unrelated to step context,
 	// e.g. the deterministic verify-failure threshold used by the stub

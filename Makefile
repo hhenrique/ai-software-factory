@@ -31,13 +31,22 @@ FORCE:
 # signal. It leaves Temporal/Postgres running afterward for inspection via
 # the UI at localhost:8080 — the next `make smoketest` wipes it again on
 # entry, so no separate reset step is needed.
+#
+# FACTORY_ROOT is pinned to a fresh temp dir for the worker process only
+# (not exported to the whole shell): worktree.create is the real gitops
+# Activity now, and its default root (/var/lib/factory) both risks a
+# permission error on a dev machine and would accumulate stale clones
+# across runs otherwise. A fresh root every run matches the same
+# clean-slate approach already used for Temporal/Postgres above.
 smoketest: $(WORKER_BIN) $(SMOKETEST_BIN)
 	$(COMPOSE) down -v --remove-orphans
 	$(COMPOSE) up -d --wait
+	export FACTORY_ROOT="$$(mktemp -d)"; \
 	./$(WORKER_BIN) & \
 	WORKER_PID=$$!; \
 	./$(SMOKETEST_BIN); CODE=$$?; \
 	kill $$WORKER_PID 2>/dev/null; \
+	rm -rf "$$FACTORY_ROOT"; \
 	exit $$CODE
 
 compose-down:

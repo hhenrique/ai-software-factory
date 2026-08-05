@@ -48,6 +48,11 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 	}
 	actx := workflow.WithActivityOptions(ctx, ao)
 
+	// Temporal's own WorkflowExecution.ID is the Run id (doc 05: "Run →
+	// Temporal workflow execution") — no separate RunID field needed on
+	// RunInput.
+	runID := workflow.GetInfo(ctx).WorkflowExecution.ID
+
 	var gate BudgetGate = NoopBudgetGate{}
 
 	runContext := make(map[string]any, len(in.InitialContext))
@@ -67,6 +72,7 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 				FinalState:   currentID,
 				StepsVisited: stepsVisited,
 				BudgetSpent:  budgetAttempts,
+				FinalContext: runContext,
 			}, nil
 		}
 
@@ -105,6 +111,8 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 			Harness:       roleHarness(def, step.Role),
 			Context:       snapshotContext(runContext, step.Context),
 			AttemptNumber: attemptNumber,
+			RunID:         runID,
+			Repo:          in.Repo,
 			RunParams: map[string]any{
 				"fail_verify_until_attempt": in.FailVerifyUntilAttempt,
 			},
