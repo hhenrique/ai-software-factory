@@ -51,6 +51,51 @@ func TestParseGitHubIdentity(t *testing.T) {
 	}
 }
 
+func TestParseGitHubIdentityTolerantOfPastedURLs(t *testing.T) {
+	cases := []string{
+		"https://github.com/hhenrique/toy-repo",
+		"https://github.com/hhenrique/toy-repo.git",
+		"http://github.com/hhenrique/toy-repo",
+		"github.com/hhenrique/toy-repo/",
+		"  github.com/hhenrique/toy-repo  ",
+	}
+	for _, in := range cases {
+		name, cloneURL, err := parseGitHubIdentity(in)
+		if err != nil {
+			t.Errorf("parseGitHubIdentity(%q): %v", in, err)
+			continue
+		}
+		if name != "github.com/hhenrique/toy-repo" {
+			t.Errorf("parseGitHubIdentity(%q): name = %q, want github.com/hhenrique/toy-repo", in, name)
+		}
+		if cloneURL != "https://github.com/hhenrique/toy-repo.git" {
+			t.Errorf("parseGitHubIdentity(%q): cloneURL = %q", in, cloneURL)
+		}
+	}
+}
+
+func TestListWorkflowFiles(t *testing.T) {
+	files, err := listWorkflowFiles("../../workflows")
+	if err != nil {
+		t.Fatalf("listWorkflowFiles: %v", err)
+	}
+	found := false
+	for _, f := range files {
+		if f == "../../workflows/issue-to-pr-claude-only.yaml" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("listWorkflowFiles = %v, want it to include issue-to-pr-claude-only.yaml", files)
+	}
+}
+
+func TestListWorkflowFilesMissingDirErrors(t *testing.T) {
+	if _, err := listWorkflowFiles("../../does-not-exist"); err == nil {
+		t.Fatalf("expected an error for a missing directory")
+	}
+}
+
 func TestCreateListEnableDisableRepositoryHandlers(t *testing.T) {
 	pool := requirePool(t)
 	name := "test-controlplane-" + time.Now().Format("20060102T150405.000000000")

@@ -13,10 +13,13 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -49,6 +52,7 @@ func main() {
 	mux.HandleFunc("POST /api/repositories", createRepositoryHandler(pool))
 	mux.HandleFunc("POST /api/repositories/enable", setEnabledHandler(pool, true))
 	mux.HandleFunc("POST /api/repositories/disable", setEnabledHandler(pool, false))
+	mux.HandleFunc("GET /api/workflows", listWorkflowsHandler(envOr("CONTROLPLANE_WORKFLOWS_DIR", "workflows")))
 
 	log.Printf("controlplane: listening on %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
@@ -61,6 +65,45 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// listWorkflowsHandler backs the "Default workflow" combobox — just
+// enough of docs/04's (not yet built) Workflows section to prevent typos
+// in the Repositories form, not that section itself: a plain directory
+// scan, no parse/validate-status surfacing (see that section's own "not
+// built yet" note).
+func listWorkflowsHandler(dir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		files, err := listWorkflowFiles(dir)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, files)
+	}
+}
+
+// listWorkflowFiles returns every *.yaml/*.yml file directly under dir,
+// sorted. Not recursive — workflows/ has no subdirectories today, and
+// there's no reason yet to walk one that might appear.
+func listWorkflowFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("list workflow files in %s: %w", dir, err)
+	}
+	var files []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		ext := filepath.Ext(e.Name())
+		if ext != ".yaml" && ext != ".yml" {
+			continue
+		}
+		files = append(files, filepath.Join(dir, e.Name()))
+	}
+	sort.Strings(files)
+	return files, nil
 }
 
 func listRepositoriesHandler(pool *pgxpool.Pool) http.HandlerFunc {
@@ -134,13 +177,24 @@ func setEnabledHandler(pool *pgxpool.Pool, enabled bool) http.HandlerFunc {
 	}
 }
 
-// parseGitHubIdentity validates and splits a "github.com/owner/repo"
-// identity into a unique repository name (the identity itself, verbatim)
-// and an https clone URL — the same URL shape gitops.GitHubSlug expects
-// back out of it, so a repository registered here is immediately usable
-// by pr.create_and_link and cmd/submittask's gh issue lookups.
+// parseGitHubIdentity validates and splits a GitHub repo reference into a
+// unique repository name (the canonical "github.com/owner/repo" form,
+// verbatim) and an https clone URL — the same URL shape gitops.GitHubSlug
+// expects back out of it, so a repository registered here is immediately
+// usable by pr.create_and_link and cmd/submittask's gh issue lookups.
+//
+// Tolerates pasting a full clone URL, not just the bare identity the
+// field's placeholder suggests — https://github.com/owner/repo,
+// https://github.com/owner/repo.git, and http:// are all normalized down
+// to the same canonical form, since a human copying a URL out of a
+// browser or `git remote -v` shouldn't have to hand-edit it first.
 func parseGitHubIdentity(identity string) (name, cloneURL string, err error) {
-	identity = strings.TrimSuffix(strings.TrimSpace(identity), "/")
+	identity = strings.TrimSpace(identity)
+	identity = strings.TrimPrefix(identity, "https://")
+	identity = strings.TrimPrefix(identity, "http://")
+	identity = strings.TrimSuffix(identity, ".git")
+	identity = strings.TrimSuffix(identity, "/")
+
 	const prefix = "github.com/"
 	if !strings.HasPrefix(identity, prefix) {
 		return "", "", errors.New(`identity must look like "github.com/<owner>/<repo>" — GitHub is the only managed provider in this release`)

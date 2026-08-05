@@ -191,11 +191,25 @@ body {
   font-size: 0.85rem;
 }
 
+/* .form-row: fields side by side, for a future compact/inline form.
+   .field-stack: fields stacked full-width, one per row, button last —
+   the shape long values (repo identities, shell test commands) need. */
 .form-row {
   display: flex;
   gap: var(--space-2);
   align-items: flex-end;
   flex-wrap: wrap;
+}
+
+.field-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-4);
+}
+
+.field-stack button.primary {
+  align-self: flex-start;
 }
 
 .field {
@@ -209,7 +223,8 @@ body {
   font-size: 0.8rem;
 }
 
-.field input {
+.field input,
+.field select {
   background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
@@ -217,10 +232,11 @@ body {
   padding: var(--space-2) var(--space-3);
   font-family: var(--font-mono);
   font-size: 0.85rem;
-  min-width: 220px;
+  width: 100%;
 }
 
-.field input:focus {
+.field input:focus,
+.field select:focus {
   outline: none;
   border-color: var(--color-text-muted);
 }

@@ -94,7 +94,7 @@ function renderRepositories(container) {
     <div class="card-header">
       <h2>Add GitHub repository</h2>
     </div>
-    <div class="form-row">
+    <div class="field-stack">
       <div class="field">
         <label for="rf-identity">Canonical identity</label>
         <input id="rf-identity" type="text" placeholder="github.com/owner/repo">
@@ -105,13 +105,27 @@ function renderRepositories(container) {
       </div>
       <div class="field">
         <label for="rf-workflow">Default workflow</label>
-        <input id="rf-workflow" type="text" placeholder="workflows/issue-to-pr-claude-only.yaml">
+        <select id="rf-workflow">
+          <option value="">(none)</option>
+        </select>
       </div>
       <button class="primary" id="rf-submit">+ Add repository</button>
     </div>
     <p class="hint">GitHub is the only managed provider in this release.</p>
   `;
   wrap.appendChild(formCard);
+
+  apiRequest("/api/workflows")
+    .then((files) => {
+      const select = document.getElementById("rf-workflow");
+      for (const path of files || []) {
+        const option = document.createElement("option");
+        option.value = path;
+        option.textContent = path;
+        select.appendChild(option);
+      }
+    })
+    .catch(showError);
 
   const listCard = document.createElement("div");
   listCard.className = "card";
