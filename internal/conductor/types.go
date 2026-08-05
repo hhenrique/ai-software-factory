@@ -77,6 +77,19 @@ type ActivityInput struct {
 	Action  string // tool steps only
 	Role    string // agent steps only
 	Harness string // agent steps only; resolved from Definition.Roles[Role]
+	Model   string // agent steps only; resolved from Definition.Roles[Role]
+
+	// Params carries harness-invocation parameters beyond the model
+	// itself (e.g. "effort"), copied from Definition.Roles[Role].Params.
+	// Canonical, adapter-agnostic keys — see workflowdef.Role's doc
+	// comment for the translation contract.
+	Params map[string]string
+
+	// OutputSchema is the step's declared output_schema (nil if none) —
+	// an agent-step harness adapter needs this to know whether to expect
+	// a structured verdict/findings response or just a diff (doc 03: no
+	// schema required for the Coder's initial EXECUTING pass).
+	OutputSchema map[string]any
 
 	// Context carries the Run's accumulated context available to this
 	// step. For type: agent steps, only the fields declared via

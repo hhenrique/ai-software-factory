@@ -10,12 +10,18 @@ var defaultToolActionProducedFields = map[string][]string{
 	"worktree.create":      {"worktree_path", "branch", "clone_dir"},
 }
 
-// defaultAlwaysAvailableFields are fields the conductor computes itself,
-// not tied to any single step's output — e.g. doc 01's pruned "open items"
-// view of the review conversation, which is a conductor-maintained
-// projection over all findings raised so far, not one step's output.
+// defaultAlwaysAvailableFields are fields available from the start of a
+// Run without being any step's Produced output — either conductor-computed
+// (e.g. doc 01's pruned "open items" view of the review conversation, a
+// projection over all findings raised so far) or a Run-level input (doc
+// 02 rule 5: "either part of the immutable Run context set in an earlier
+// step's output, or a Run-level input"), supplied via RunInput.InitialContext
+// by whatever starts the Run (e.g. task_description, the Task's
+// description/acceptance intent a Coder step needs — there's no
+// persisted Task entity yet, so this is supplied directly for now).
 var defaultAlwaysAvailableFields = []string{
 	"conversation_open_items",
+	"task_description",
 }
 
 // producedFields returns the context field names step s makes available to

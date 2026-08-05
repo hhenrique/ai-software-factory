@@ -45,6 +45,10 @@ roles:
   <role_name>:
     harness: <string>           # adapter identifier, see 03-roles-and-harness-contract.md
     model: <string>
+    params:                     # optional; harness-invocation params beyond model
+      effort: <string>          # e.g. low | medium | high — adapter maps this to
+                                 # its own CLI convention (--effort, -c
+                                 # model_reasoning_effort=, --reasoning-effort, ...)
 
 budgets:
   <budget_name>:

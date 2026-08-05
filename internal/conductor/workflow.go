@@ -104,11 +104,15 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 
 		stepsVisited = append(stepsVisited, step.ID)
 
+		harness, model, params := roleConfig(def, step.Role)
 		activityIn := ActivityInput{
 			StepID:        step.ID,
 			Action:        step.Action,
 			Role:          step.Role,
-			Harness:       roleHarness(def, step.Role),
+			Harness:       harness,
+			Model:         model,
+			Params:        params,
+			OutputSchema:  step.OutputSchema,
 			Context:       stepContext(step, runContext),
 			AttemptNumber: attemptNumber,
 			RunID:         runID,
@@ -171,11 +175,12 @@ func route(step *workflowdef.Step, outcome string) (string, error) {
 	return t.Destination(), nil
 }
 
-func roleHarness(def workflowdef.Definition, roleName string) string {
+func roleConfig(def workflowdef.Definition, roleName string) (harness, model string, params map[string]string) {
 	if roleName == "" {
-		return ""
+		return "", "", nil
 	}
-	return def.Roles[roleName].Harness
+	r := def.Roles[roleName]
+	return r.Harness, r.Model, r.Params
 }
 
 // stepContext builds the Context an Activity call receives: the full

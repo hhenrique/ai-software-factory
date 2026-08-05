@@ -40,6 +40,16 @@ type Definition struct {
 type Role struct {
 	Harness string `yaml:"harness"`
 	Model   string `yaml:"model"`
+
+	// Params carries harness-invocation parameters that aren't the model
+	// itself — e.g. reasoning effort. Keys are canonical (adapter-agnostic)
+	// names the harness adapter translates into its own CLI convention
+	// (doc 03: harness-specific invocation shape must live in the
+	// adapter, never leak into the Workflow Definition or the conductor).
+	// "effort" is the only key defined so far — see
+	// internal/activities/harness's per-adapter files for how each one
+	// maps it.
+	Params map[string]string `yaml:"params,omitempty"`
 }
 
 // Budget bounds a loop in the graph. Zero value for a field means

@@ -29,7 +29,7 @@ steps:
   - id: execute
     type: agent
     role: coder
-    context: [scope_contract, worktree_path]
+    context: [scope_contract, worktree_path, task_description]
     next: verify
 
   - id: verify
@@ -44,7 +44,7 @@ steps:
   - id: revise_verify
     type: agent
     role: coder
-    context: [scope_contract, worktree_path, failing_tests_diff]
+    context: [scope_contract, worktree_path, task_description, failing_tests_diff]
     next: verify
 
   - id: review

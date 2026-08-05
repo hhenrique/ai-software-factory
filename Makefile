@@ -45,6 +45,14 @@ FORCE:
 # them in your own shell before running this target. Checked before
 # bringing Temporal/Postgres up so a missing config fails in <1s, not
 # after a ~20s compose cycle.
+#
+# FACTORY_STUB_HARNESS_INVOKE forces the worker to use the stub
+# harness.invoke instead of the real one (internal/activities/harness) —
+# unlike every other real Activity, harness.invoke costs real API credits
+# per call, so this target always sets it: routine dev-loop smoketest
+# runs stay free, unconditionally, not just by default. To exercise the
+# real harness adapters (real cost), run the worker directly rather than
+# through this target — see cmd/worker's doc comment.
 smoketest: $(WORKER_BIN) $(SMOKETEST_BIN)
 	@if [ -z "$$SMOKETEST_REPO_CLONE_URL" ]; then \
 		echo "smoketest: SMOKETEST_REPO_CLONE_URL is not set — see cmd/smoketest/main.go's doc comment" >&2; \
@@ -53,6 +61,7 @@ smoketest: $(WORKER_BIN) $(SMOKETEST_BIN)
 	$(COMPOSE) down -v --remove-orphans
 	$(COMPOSE) up -d --wait
 	export FACTORY_ROOT="$$(mktemp -d)"; \
+	export FACTORY_STUB_HARNESS_INVOKE=1; \
 	./$(WORKER_BIN) & \
 	WORKER_PID=$$!; \
 	./$(SMOKETEST_BIN); CODE=$$?; \
