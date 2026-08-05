@@ -1,0 +1,12 @@
+workflow: broken-rule5-unproducible-context
+version: 1
+
+roles:
+  coder: { harness: codex, model: chatgpt-sol }
+
+steps:
+  - id: execute
+    type: agent
+    role: coder
+    context: [scope_contract]
+    next: COMPLETED

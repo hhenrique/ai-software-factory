@@ -1,0 +1,15 @@
+workflow: broken-rule4-unmapped-verdict
+version: 1
+
+roles:
+  planner: { harness: claude-plan, model: sonnet-5-medium }
+
+steps:
+  - id: plan
+    type: agent
+    role: planner
+    output_schema: { verdict: [proceed, reject, escalate] }
+    on:
+      proceed: COMPLETED
+      reject: FAILED
+    on_malformed_output: FAILED

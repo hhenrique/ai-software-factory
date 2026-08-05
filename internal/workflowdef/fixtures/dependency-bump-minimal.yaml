@@ -1,0 +1,39 @@
+workflow: dependency-bump-minimal
+version: 1
+
+roles:
+  coder: { harness: codex, model: chatgpt-sol }
+
+budgets:
+  verify_rounds: { max_attempts: 2 }
+
+steps:
+  - id: provision
+    type: tool
+    action: worktree.create
+    next: execute
+
+  - id: execute
+    type: agent
+    role: coder
+    next: verify
+
+  - id: verify
+    type: tool
+    action: run.tests_lint_build
+    budget: verify_rounds
+    on:
+      pass: merge
+      fail: revise_verify
+      budget_exhausted: FAILED
+
+  - id: revise_verify
+    type: agent
+    role: coder
+    context: [failing_tests_diff]
+    next: verify
+
+  - id: merge
+    type: tool
+    action: pr.create_and_link
+    next: COMPLETED

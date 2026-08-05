@@ -1,0 +1,14 @@
+workflow: broken-rule3-missing-malformed-handler
+version: 1
+
+roles:
+  planner: { harness: claude-plan, model: sonnet-5-medium }
+
+steps:
+  - id: plan
+    type: agent
+    role: planner
+    output_schema: { verdict: [proceed, reject] }
+    on:
+      proceed: COMPLETED
+      reject: FAILED

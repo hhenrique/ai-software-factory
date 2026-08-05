@@ -1,0 +1,14 @@
+workflow: broken-rule2-unknown-role
+version: 1
+
+roles:
+  coder: { harness: codex, model: chatgpt-sol }
+
+budgets:
+  verify_rounds: { max_attempts: 2 }
+
+steps:
+  - id: execute
+    type: agent
+    role: nonexistent_role
+    next: COMPLETED
