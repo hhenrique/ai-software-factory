@@ -655,6 +655,91 @@ func TestRunWorkflowHarnessLimitSharedAcrossDifferentRoles(t *testing.T) {
 	env.AssertExpectations(t)
 }
 
+func TestRunWorkflowOscillationFailsFastBeforeAttemptCap(t *testing.T) {
+	env := newTestEnv(t)
+	def := workflowdef.Definition{
+		Workflow: "oscillation-test",
+		Version:  1,
+		// max_attempts:5 is deliberately generous — the point of this test
+		// is that a non-shrinking failing-test-set fails fast on attempt 2,
+		// long before the attempt cap would ever kick in.
+		Budgets: map[string]workflowdef.Budget{"verify_rounds": {MaxAttempts: 5}},
+		Steps: []workflowdef.Step{
+			{
+				ID: "verify", Type: workflowdef.StepTypeTool, Action: "run.tests_lint_build",
+				Budget: "verify_rounds",
+				On: map[string]workflowdef.Target{
+					"pass":             {StepOrState: "COMPLETED"},
+					"fail":             {StepOrState: "verify"},
+					"budget_exhausted": {StepOrState: "FAILED"},
+				},
+			},
+		},
+	}
+	require.Empty(t, workflowdef.Validate(&def))
+
+	// Same failing test on both attempts — attempt 2's set is equal to
+	// (not shrinking from) attempt 1's, so CheckOscillation must trip
+	// before a 3rd Activity call.
+	env.OnActivity("run.tests_lint_build", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Outcome: "fail", Produced: map[string]any{"failing_tests_diff": "FAIL a"}}, nil).
+		Twice()
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{Definition: def})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var result conductor.RunResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+
+	require.Equal(t, "FAILED", result.FinalState)
+	require.Equal(t, []string{"verify", "verify"}, result.StepsVisited,
+		"the 3rd entry is oscillation-blocked, well before max_attempts:5")
+	env.AssertExpectations(t)
+}
+
+func TestRunWorkflowShrinkingFailingTestsDoesNotTripOscillation(t *testing.T) {
+	env := newTestEnv(t)
+	def := workflowdef.Definition{
+		Workflow: "oscillation-shrinking-test",
+		Version:  1,
+		Budgets:  map[string]workflowdef.Budget{"verify_rounds": {MaxAttempts: 5}},
+		Steps: []workflowdef.Step{
+			{
+				ID: "verify", Type: workflowdef.StepTypeTool, Action: "run.tests_lint_build",
+				Budget: "verify_rounds",
+				On: map[string]workflowdef.Target{
+					"pass":             {StepOrState: "COMPLETED"},
+					"fail":             {StepOrState: "verify"},
+					"budget_exhausted": {StepOrState: "FAILED"},
+				},
+			},
+		},
+	}
+	require.Empty(t, workflowdef.Validate(&def))
+
+	env.OnActivity("run.tests_lint_build", mock.Anything, mock.Anything).
+		Return(func(ctx context.Context, in conductor.ActivityInput) (conductor.ActivityOutput, error) {
+			if in.AttemptNumber == 1 {
+				return conductor.ActivityOutput{Outcome: "fail", Produced: map[string]any{"failing_tests_diff": "FAIL a\nFAIL b"}}, nil
+			}
+			return conductor.ActivityOutput{Outcome: "pass"}, nil
+		}).Twice()
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{Definition: def})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var result conductor.RunResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+
+	require.Equal(t, "COMPLETED", result.FinalState)
+	require.Equal(t, []string{"verify", "verify"}, result.StepsVisited)
+	env.AssertExpectations(t)
+}
+
 func TestRunWorkflowStartsAtTerminalState(t *testing.T) {
 	env := newTestEnv(t)
 	def := workflowdef.Definition{

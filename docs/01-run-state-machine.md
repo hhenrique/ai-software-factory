@@ -117,6 +117,18 @@ failure set is not, regardless of attempts remaining.
 of or equal to a previous attempt's failing set (not shrinking), treat
 this as non-convergence and fail fast — do not wait for the attempt cap.
 
+Implementation note: a repo's build/test/lint command is arbitrary shell
+(04-control-plane-mvp-scope.md), so there's no structured, tool-agnostic
+test-identity list to diff — parsing every test runner's own output format
+into real test names isn't a "one correct mechanical answer" (rule 2). The
+decided mechanical proxy: treat each non-blank line of the combined
+stdout+stderr as one "failing" element and compare line-sets across the
+two most recent attempts. Noisier than real test identities (a
+timestamp-bearing line looks "new" every attempt, understating
+convergence), but directionally right, and a false negative here just
+falls through to the attempt cap rather than looping forever — see
+`RealBudgetGate.CheckOscillation` (`internal/conductor/budgetgate.go`).
+
 **Flakiness guard:** before routing a failure to REVISING, VERIFYING
 should deterministically re-run the failed test(s) in isolation once. A
 flaky test looks identical to a real regression from inside this loop,
@@ -228,6 +240,18 @@ If the Reviewer raises materially the same finding twice with the same
 Coder dispute reasoning both times, treat this as a deadlock and
 escalate to REVIEW_PENDING before the round cap is reached, not after —
 same logic as the oscillation check in the verify loop.
+
+Implementation note: `coder_response` (the Coder's dispute) carries no
+budget of its own in `issue-to-pr-standard` — only `review` does — so its
+output isn't in the history `RealBudgetGate.CheckOscillation` compares
+across rounds; today's check is "the Reviewer's findings set didn't shrink
+round over round," without also confirming the Coder's dispute reasoning
+repeated. In practice a repeated identical findings set already means the
+round produced no progress regardless of what the Coder said, which is the
+signal that actually matters for failing fast — but if `dispute` reasoning
+text needs to factor in later (e.g. two different findings disputed with
+the same boilerplate non-answer), it would need its own producer field
+threaded through `conversation_open_items` and into this comparison.
 
 Hitting the review-round cap with an unresolved dispute routes to
 REVIEW_PENDING (not FAILED): a human arbitrates with full context from
