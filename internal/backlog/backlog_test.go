@@ -89,3 +89,68 @@ func TestCreateTaskDefaultsSourceWhenMissing(t *testing.T) {
 		t.Errorf("source = %q, want unknown", gotSource)
 	}
 }
+
+func TestInsertHumanTaskThenAttachRun(t *testing.T) {
+	a := requirePool(t)
+	ctx := context.Background()
+
+	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr-claude-only", "fix the thing")
+	if err != nil {
+		t.Fatalf("InsertHumanTask: %v", err)
+	}
+	if taskID == "" {
+		t.Fatalf("expected a non-empty task id")
+	}
+
+	var gotRunID *string
+	var gotRepo, gotWorkflow, gotSource, gotStatus string
+	err = a.Pool.QueryRow(ctx,
+		`SELECT run_id, target_repo, workflow, source, status FROM backlog_tasks WHERE task_id = $1`, taskID,
+	).Scan(&gotRunID, &gotRepo, &gotWorkflow, &gotSource, &gotStatus)
+	if err != nil {
+		t.Fatalf("query back: %v", err)
+	}
+	if gotRunID != nil {
+		t.Errorf("run_id = %v, want NULL before AttachRun", *gotRunID)
+	}
+	if gotRepo != "hhenrique/toy-repo" {
+		t.Errorf("target_repo = %q, want hhenrique/toy-repo", gotRepo)
+	}
+	if gotWorkflow != "issue-to-pr-claude-only" {
+		t.Errorf("workflow = %q, want issue-to-pr-claude-only", gotWorkflow)
+	}
+	if gotSource != "human" {
+		t.Errorf("source = %q, want human", gotSource)
+	}
+	if gotStatus != "QUEUED" {
+		t.Errorf("status = %q, want QUEUED", gotStatus)
+	}
+
+	runID := "test-run-" + time.Now().Format(time.RFC3339Nano)
+	if err := AttachRun(ctx, a.Pool, taskID, runID); err != nil {
+		t.Fatalf("AttachRun: %v", err)
+	}
+
+	err = a.Pool.QueryRow(ctx,
+		`SELECT run_id, status FROM backlog_tasks WHERE task_id = $1`, taskID,
+	).Scan(&gotRunID, &gotStatus)
+	if err != nil {
+		t.Fatalf("query back after AttachRun: %v", err)
+	}
+	if gotRunID == nil || *gotRunID != runID {
+		t.Errorf("run_id after AttachRun = %v, want %q", gotRunID, runID)
+	}
+	if gotStatus != "RUNNING" {
+		t.Errorf("status after AttachRun = %q, want RUNNING", gotStatus)
+	}
+}
+
+func TestAttachRunUnknownTaskIDErrors(t *testing.T) {
+	a := requirePool(t)
+	ctx := context.Background()
+
+	err := AttachRun(ctx, a.Pool, "does-not-exist-"+time.Now().Format(time.RFC3339Nano), "some-run")
+	if err == nil {
+		t.Fatalf("expected an error for an unknown task_id")
+	}
+}

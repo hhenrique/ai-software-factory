@@ -236,3 +236,32 @@ func TestBranchName(t *testing.T) {
 		t.Errorf("BranchName = %q, want factory/run-123", got)
 	}
 }
+
+func TestGitHubSlug(t *testing.T) {
+	cases := []struct {
+		cloneURL string
+		want     string
+		wantErr  bool
+	}{
+		{cloneURL: "https://github.com/hhenrique/toy-repo.git", want: "hhenrique/toy-repo"},
+		{cloneURL: "https://github.com/hhenrique/toy-repo", want: "hhenrique/toy-repo"},
+		{cloneURL: "git@github.com:hhenrique/toy-repo.git", wantErr: true},
+		{cloneURL: "https://github.com/", wantErr: true},
+	}
+	for _, tc := range cases {
+		got, err := GitHubSlug(tc.cloneURL)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("GitHubSlug(%q): expected error", tc.cloneURL)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("GitHubSlug(%q): unexpected error: %v", tc.cloneURL, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("GitHubSlug(%q) = %q, want %q", tc.cloneURL, got, tc.want)
+		}
+	}
+}

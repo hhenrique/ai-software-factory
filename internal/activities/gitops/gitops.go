@@ -146,6 +146,24 @@ func BranchName(runID string) string {
 	return "factory/" + runID
 }
 
+// GitHubSlug extracts "owner/repo" from an https://github.com/... clone
+// URL, for passing to `gh ... --repo`. Only the https form is handled —
+// every caller of this (cmd/smoketest's PR cleanup, cmd/submittask's issue
+// fetch) already requires an https clone URL for pr.create_and_link's own
+// gh usage, so there's no case where a caller has this URL in some other
+// form.
+func GitHubSlug(cloneURL string) (string, error) {
+	const prefix = "https://github.com/"
+	if !strings.HasPrefix(cloneURL, prefix) {
+		return "", fmt.Errorf("clone URL must start with %q to derive a GitHub owner/repo slug, got %q", prefix, cloneURL)
+	}
+	slug := strings.TrimSuffix(strings.TrimPrefix(cloneURL, prefix), ".git")
+	if slug == "" || !strings.Contains(slug, "/") {
+		return "", fmt.Errorf("clone URL doesn't look like %s<owner>/<repo>[.git], got %q", prefix, cloneURL)
+	}
+	return slug, nil
+}
+
 // parseSymrefHEAD extracts the branch name from `git ls-remote --symref
 // <url> HEAD` output, e.g.:
 //

@@ -172,7 +172,9 @@ The Task backlog / intake.
   (`human`, `ticket`, `auto-generated:review-finding`), status, assigned
   Workflow, priority
 - Must support creating a Task programmatically (from the out-of-scope
-  finding path in 01-run-state-machine.md) as well as manually
+  finding path in 01-run-state-machine.md) as well as manually — see
+  "Manual Task submission, current state" below for where this stands
+  today (a CLI, not a control-plane UI form yet)
 - A view filtered to `source = auto-generated:review-finding` is useful
   for triage and for spotting repos/areas generating a lot of them (a
   signal that scope contracts for that area are too narrow, or the code
@@ -190,6 +192,40 @@ describes: no priority, no assigned Workflow, no triage UI, and no
 `auto-generated:review-finding` source tag distinct from a plain
 `source` string. Treat `backlog_tasks` as the seed of the real Task
 entity, not the entity itself.
+
+#### Manual Task submission, current state
+
+`cmd/submittask` is the MVP's real Task/Run entry point — a CLI, not a
+control-plane UI form (consistent with keeping the control plane thin
+until there's enough Run volume to justify investing in one, per this
+doc's Principle section). Given a repo (clone URL, test command) and a
+task description — either free text or `-github-issue N`, which shells
+out to `gh issue view` for the title/body, the same established
+gh-owns-auth pattern as `internal/activities/pr` — it records a Task
+(`internal/backlog.InsertHumanTask`, `source: human`) and immediately
+starts a real Run against it. There's no decoupled scheduler (see
+00-vision-and-principles.md's deferred list), so submitting a Task and
+starting its Run are one action for now, not two; `AttachRun` records
+the Run id back onto the Task row right after Temporal accepts it.
+
+This is also the first place a GitHub issue becomes a Task, ahead of the
+"near future: GitHub/tracker integration" this section anticipates —
+today that integration is a human running the CLI with an issue number,
+not a webhook. Verified live against `toy-repo`'s `agent-ready`-labeled
+issues, using `workflows/issue-to-pr-claude-only.yaml` (see that file's
+own doc comment for why it's a separate Workflow Definition from
+`issue-to-pr-standard`) — including a real run through the full
+verify/review inner loops (two review rounds, each with a real finding
+addressed) before reaching `COMPLETED` and opening a real PR.
+
+Known gap: `backlog_tasks.status` only reflects "a Run was started"
+(`AttachRun` sets it to `RUNNING` and stops there) — nothing currently
+syncs it to the Run's actual terminal state (`COMPLETED`/`FAILED`/
+`CANCELLED`). The Run's real state lives in `run_events`, queryable by
+`run_id`; a Task row's `status` is not yet a reliable read of it. Closing
+this gap means either a periodic reconciliation pass or a callback from
+`RunWorkflow` itself — deferred until the Work section gets a real triage
+view that would actually depend on `status` being accurate.
 
 ### Workflows
 

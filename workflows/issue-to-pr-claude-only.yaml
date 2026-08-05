@@ -1,0 +1,94 @@
+# A real, deployable Workflow Definition — not a reference/test fixture
+# (those live in internal/workflowdef/fixtures and are embedded for
+# docs/tests, see internal/workflowdef/fixtures.go). This one exists
+# because the factory's only currently-licensed harness is Claude Code:
+# issue-to-pr-standard's example role config (Coder = codex, Reviewer =
+# copilot-cli) can't run for real without those CLIs' own credits. Same
+# DAG, same budgets, same schemas as issue-to-pr-standard — only the
+# roles' harness/model differ, which is exactly the kind of change the
+# harness/role indirection (03-roles-and-harness-contract.md) is meant to
+# absorb without touching the state machine or step graph.
+workflow: issue-to-pr-claude-only
+version: 1
+
+roles:
+  planner:  { harness: claude-code, model: sonnet, params: { effort: medium } }
+  coder:    { harness: claude-code, model: sonnet, params: { effort: high } }
+  reviewer: { harness: claude-code, model: sonnet, params: { effort: medium } }
+
+budgets:
+  verify_rounds: { max_attempts: 3 }
+  review_rounds: { max_rounds: 4, max_tokens: 60000 }
+
+steps:
+  - id: provision
+    type: tool
+    action: worktree.create
+    next: plan
+
+  - id: plan
+    type: agent
+    role: planner
+    context: [task_description]
+    output_schema: { verdict: [proceed, reject, escalate], scope_contract: object }
+    on:
+      proceed:  execute
+      reject:   FAILED
+      escalate: REVIEW_PENDING
+    on_malformed_output: REVIEW_PENDING
+
+  - id: execute
+    type: agent
+    role: coder
+    context: [scope_contract, worktree_path, task_description]
+    next: verify
+
+  - id: verify
+    type: tool
+    action: run.tests_lint_build
+    budget: verify_rounds
+    on:
+      pass: review
+      fail: revise_verify
+      budget_exhausted: FAILED
+
+  - id: revise_verify
+    type: agent
+    role: coder
+    context: [scope_contract, worktree_path, task_description, failing_tests_diff]
+    next: verify
+
+  - id: review
+    type: agent
+    role: reviewer
+    context: [scope_contract, diff]
+    budget: review_rounds
+    output_schema: { findings: array, verdict: [approved, changes_required] }
+    on:
+      approved: merge
+      changes_required: coder_response
+      budget_exhausted: REVIEW_PENDING
+    on_malformed_output: REVIEW_PENDING
+
+  - id: coder_response
+    type: agent
+    role: coder
+    context: [scope_contract, findings, conversation_open_items]
+    output_schema: { verdict: [address, dispute, escalate, out_of_scope] }
+    on:
+      address:      revise_review
+      dispute:      review
+      escalate:     REVIEW_PENDING
+      out_of_scope: { action: task.create(source=review-finding), next: review }
+    on_malformed_output: REVIEW_PENDING
+
+  - id: revise_review
+    type: agent
+    role: coder
+    context: [scope_contract, worktree_path]
+    next: verify
+
+  - id: merge
+    type: tool
+    action: pr.create_and_link
+    next: COMPLETED

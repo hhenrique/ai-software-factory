@@ -23,7 +23,6 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
-	"strings"
 	"time"
 
 	"go.temporal.io/sdk/client"
@@ -93,7 +92,7 @@ func main() {
 			"local-only fixture that can stand in for one). Point it at a repo you're fine getting " +
 			"disposable test PRs, e.g. https://github.com/<you>/toy-repo.git")
 	}
-	repoSlug, err := githubRepoSlug(cloneURL)
+	repoSlug, err := gitops.GitHubSlug(cloneURL)
 	if err != nil {
 		log.Fatalf("smoketest: %v", err)
 	}
@@ -221,22 +220,6 @@ func runScenario(c client.Client, taskQueue string, def workflowdef.Definition, 
 	}
 
 	return ok
-}
-
-// githubRepoSlug extracts "owner/repo" from an https://github.com/... clone
-// URL, for passing to `gh ... --repo`. Only the https form is supported —
-// smoketest tooling doesn't need to handle every URL shape gitops.WorktreeCreate
-// itself is happy to clone from.
-func githubRepoSlug(cloneURL string) (string, error) {
-	const prefix = "https://github.com/"
-	if !strings.HasPrefix(cloneURL, prefix) {
-		return "", fmt.Errorf("SMOKETEST_REPO_CLONE_URL must start with %q for gh pr cleanup to work, got %q", prefix, cloneURL)
-	}
-	slug := strings.TrimSuffix(strings.TrimPrefix(cloneURL, prefix), ".git")
-	if slug == "" || !strings.Contains(slug, "/") {
-		return "", fmt.Errorf("SMOKETEST_REPO_CLONE_URL doesn't look like %s<owner>/<repo>[.git], got %q", prefix, cloneURL)
-	}
-	return slug, nil
 }
 
 func cleanupPR(repoSlug, branch string) {
