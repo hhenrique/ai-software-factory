@@ -16,6 +16,7 @@ steps:
   - id: execute
     type: agent
     role: coder
+    context: [worktree_path]
     next: verify
 
   - id: verify
@@ -30,7 +31,7 @@ steps:
   - id: revise_verify
     type: agent
     role: coder
-    context: [failing_tests_diff]
+    context: [worktree_path, failing_tests_diff]
     next: verify
 
   - id: merge

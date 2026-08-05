@@ -7,6 +7,7 @@ package workflowdef
 // WithToolActionProducedFields for actions this package doesn't know about.
 var defaultToolActionProducedFields = map[string][]string{
 	"run.tests_lint_build": {"failing_tests_diff"},
+	"worktree.create":      {"worktree_path", "branch", "clone_dir"},
 }
 
 // defaultAlwaysAvailableFields are fields the conductor computes itself,

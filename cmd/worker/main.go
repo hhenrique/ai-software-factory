@@ -4,9 +4,12 @@
 //
 // Activity registration is stub.Registrations (every Activity) with the
 // real implementations layered on top — worktree.create
-// (internal/activities/gitops) and run.tests_lint_build
-// (internal/activities/verify) are real; pr.create_and_link and
-// harness.invoke are still the throwaway stub.
+// (internal/activities/gitops), run.tests_lint_build
+// (internal/activities/verify), and pr.create_and_link
+// (internal/activities/pr) are real; only harness.invoke is still the
+// throwaway stub. What's deployed here is exactly what cmd/smoketest
+// exercises — no separate "CI-safe" stub path for anything that has a
+// real implementation.
 package main
 
 import (
@@ -19,6 +22,7 @@ import (
 	"go.temporal.io/sdk/worker"
 
 	"factory/internal/activities/gitops"
+	"factory/internal/activities/pr"
 	"factory/internal/activities/stub"
 	"factory/internal/activities/verify"
 	"factory/internal/conductor"
@@ -47,13 +51,19 @@ func main() {
 
 	gitActivities := &gitops.Activities{Paths: repoconfig.NewEnvProvider()}
 	verifyActivities := &verify.Activities{}
+	prActivities := &pr.Activities{}
 
 	registrations := make(map[string]any, len(stub.Registrations))
 	for name, fn := range stub.Registrations {
 		registrations[name] = fn
 	}
-	for _, real := range []map[string]any{gitActivities.Registrations(), verifyActivities.Registrations()} {
-		for name, fn := range real {
+	real := []map[string]any{
+		gitActivities.Registrations(),
+		verifyActivities.Registrations(),
+		prActivities.Registrations(),
+	}
+	for _, set := range real {
+		for name, fn := range set {
 			registrations[name] = fn // overrides the stub's version of the same name
 		}
 	}

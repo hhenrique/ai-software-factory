@@ -38,7 +38,18 @@ FORCE:
 # permission error on a dev machine and would accumulate stale clones
 # across runs otherwise. A fresh root every run matches the same
 # clean-slate approach already used for Temporal/Postgres above.
+#
+# SMOKETEST_REPO_CLONE_URL/SMOKETEST_REPO_NAME are required (see
+# cmd/smoketest's doc comment) — pr.create_and_link needs a real
+# GitHub-hosted repo, so there's no default to fall back to here. Set
+# them in your own shell before running this target. Checked before
+# bringing Temporal/Postgres up so a missing config fails in <1s, not
+# after a ~20s compose cycle.
 smoketest: $(WORKER_BIN) $(SMOKETEST_BIN)
+	@if [ -z "$$SMOKETEST_REPO_CLONE_URL" ]; then \
+		echo "smoketest: SMOKETEST_REPO_CLONE_URL is not set — see cmd/smoketest/main.go's doc comment" >&2; \
+		exit 1; \
+	fi
 	$(COMPOSE) down -v --remove-orphans
 	$(COMPOSE) up -d --wait
 	export FACTORY_ROOT="$$(mktemp -d)"; \

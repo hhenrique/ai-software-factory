@@ -7,7 +7,12 @@ package stub
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"factory/internal/conductor"
 )
@@ -27,10 +32,64 @@ func PRCreateAndLink(ctx context.Context, in conductor.ActivityInput) (conductor
 // HarnessInvoke is a throwaway stand-in for a real harness adapter call —
 // every agent step this slice dispatches here regardless of role, and it
 // always reports a canned diff, never malformed output.
+//
+// If worktree_path is available in context (the step declared it, e.g.
+// execute/revise_verify in the reference Workflow Definitions), it also
+// actually writes and commits a small change there — a stub that claims
+// to produce a "diff" but never applies it to any file is lying about its
+// own contract, and downstream real Activities depend on that being true:
+// pr.create_and_link has nothing to push/PR if the branch never diverges
+// from its base. When worktree_path isn't available, it falls back to
+// just returning the canned diff text, unchanged from before.
 func HarnessInvoke(ctx context.Context, in conductor.ActivityInput) (conductor.ActivityOutput, error) {
+	diff := "--- stub diff for step " + in.StepID + " ---"
+
+	if worktreePath, _ := in.Context["worktree_path"].(string); worktreePath != "" {
+		if err := applyStubChange(ctx, worktreePath, in.StepID, in.AttemptNumber); err != nil {
+			return conductor.ActivityOutput{}, fmt.Errorf("stub: harness.invoke: %w", err)
+		}
+	}
+
 	return conductor.ActivityOutput{
-		Produced: map[string]any{"diff": "--- stub diff for step " + in.StepID + " ---"},
+		Produced: map[string]any{"diff": diff},
 	}, nil
+}
+
+// applyStubChange appends a line recording this invocation to a scratch
+// file and commits it — deterministic, harmless, and enough for
+// downstream steps (verify, merge) to have something real to work with.
+func applyStubChange(ctx context.Context, worktreePath, stepID string, attempt int) error {
+	path := filepath.Join(worktreePath, "FACTORY_STUB_CHANGE.md")
+	existing, _ := os.ReadFile(path)
+	line := fmt.Sprintf("- stub harness change from step %q, attempt %d\n", stepID, attempt)
+	if err := os.WriteFile(path, append(existing, []byte(line)...), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	if err := runGit(ctx, worktreePath, "add", "FACTORY_STUB_CHANGE.md"); err != nil {
+		return err
+	}
+
+	// Retrying the same attempt (e.g. an at-least-once Activity
+	// redelivery) appends an identical line, leaving nothing staged —
+	// that's a no-op, not an error.
+	diffCmd := exec.CommandContext(ctx, "git", "diff", "--cached", "--quiet")
+	diffCmd.Dir = worktreePath
+	if err := diffCmd.Run(); err == nil {
+		return nil
+	}
+
+	return runGit(ctx, worktreePath, "-c", "user.email=factory-stub@example.com", "-c", "user.name=factory-stub",
+		"commit", "-q", "-m", fmt.Sprintf("stub: change from %s (attempt %d)", stepID, attempt))
+}
+
+func runGit(ctx context.Context, dir string, args ...string) error {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // RunTestsLintBuild is a deterministic stand-in for the real

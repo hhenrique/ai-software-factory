@@ -2,10 +2,51 @@ package stub
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"factory/internal/conductor"
 )
+
+func requireGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available on PATH")
+	}
+}
+
+func newFixtureWorktree(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "test"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	for _, args := range [][]string{
+		{"add", "README.md"},
+		{"commit", "-q", "-m", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	return dir
+}
 
 func TestRunTestsLintBuildThreshold(t *testing.T) {
 	ctx := context.Background()
@@ -60,6 +101,57 @@ func TestHarnessInvokeReturnsDiff(t *testing.T) {
 	}
 	if _, ok := out.Produced["diff"]; !ok {
 		t.Errorf("expected diff in Produced")
+	}
+}
+
+func TestHarnessInvokeAppliesRealChangeWhenWorktreePathAvailable(t *testing.T) {
+	requireGit(t)
+	dir := newFixtureWorktree(t)
+
+	out, err := HarnessInvoke(context.Background(), conductor.ActivityInput{
+		StepID:        "execute",
+		AttemptNumber: 1,
+		Context:       map[string]any{"worktree_path": dir},
+	})
+	if err != nil {
+		t.Fatalf("HarnessInvoke: %v", err)
+	}
+	if _, ok := out.Produced["diff"]; !ok {
+		t.Errorf("expected diff in Produced")
+	}
+
+	logCmd := exec.Command("git", "log", "--oneline")
+	logCmd.Dir = dir
+	log, err := logCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log: %v: %s", err, log)
+	}
+	if !strings.Contains(string(log), "execute") {
+		t.Errorf("expected a commit mentioning step %q, got log:\n%s", "execute", log)
+	}
+
+	statusCmd := exec.Command("git", "status", "--porcelain")
+	statusCmd.Dir = dir
+	status, err := statusCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git status: %v: %s", err, status)
+	}
+	if strings.TrimSpace(string(status)) != "" {
+		t.Errorf("expected a clean working tree after HarnessInvoke commits, got status:\n%s", status)
+	}
+}
+
+func TestHarnessInvokeRetrySameAttemptIsIdempotent(t *testing.T) {
+	requireGit(t)
+	dir := newFixtureWorktree(t)
+
+	in := conductor.ActivityInput{StepID: "execute", AttemptNumber: 1, Context: map[string]any{"worktree_path": dir}}
+	if _, err := HarnessInvoke(context.Background(), in); err != nil {
+		t.Fatalf("first HarnessInvoke: %v", err)
+	}
+	// Simulate an at-least-once Activity redelivery for the same attempt.
+	if _, err := HarnessInvoke(context.Background(), in); err != nil {
+		t.Fatalf("second HarnessInvoke (retry): %v", err)
 	}
 }
 

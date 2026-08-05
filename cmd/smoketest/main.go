@@ -5,6 +5,15 @@
 // (not a timestamp/UUID suffix) — reproducibility comes from `make
 // smoketest` wiping Temporal/Postgres state before every run, and fixed
 // IDs make a run easy to find by name in the Temporal UI while debugging.
+//
+// Every Activity cmd/worker registers is real (see cmd/worker) except
+// harness.invoke — including pr.create_and_link, which needs a real
+// GitHub-hosted repo to push/PR against (a "Pull Request" isn't a git
+// object, so there's no local-only equivalent to fall back to). That
+// target is SMOKETEST_REPO_CLONE_URL/SMOKETEST_REPO_NAME, required env
+// vars: dev machines point them at a personal disposable-PR repo (e.g.
+// toy-repo); this intentionally isn't hardcoded or defaulted here since
+// it's account-specific, not something to check in.
 package main
 
 import (
@@ -13,7 +22,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"time"
@@ -77,6 +85,18 @@ func main() {
 		log.Fatalf("smoketest: dependency-bump-minimal failed validation:\n%s", errs.Error())
 	}
 
+	cloneURL := os.Getenv("SMOKETEST_REPO_CLONE_URL")
+	if cloneURL == "" {
+		log.Fatalf("smoketest: SMOKETEST_REPO_CLONE_URL is required — pr.create_and_link needs a real " +
+			"GitHub-hosted repo to push/PR against (a Pull Request isn't a git object, so there's no " +
+			"local-only fixture that can stand in for one). Point it at a repo you're fine getting " +
+			"disposable test PRs, e.g. https://github.com/<you>/toy-repo.git")
+	}
+	repoSlug, err := githubRepoSlug(cloneURL)
+	if err != nil {
+		log.Fatalf("smoketest: %v", err)
+	}
+
 	hostPort := envOr("TEMPORAL_HOST_PORT", "localhost:7233")
 	namespace := envOr("TEMPORAL_NAMESPACE", "default")
 	taskQueue := envOr("TASK_QUEUE", "factory-conductor")
@@ -89,28 +109,25 @@ func main() {
 	}
 	defer c.Close()
 
-	// A real, throwaway local git repo — worktree.create is the real
-	// gitops Activity now (see cmd/worker), not the stub no-op, so every
-	// scenario needs something real to clone. Local filesystem path, not
-	// a network URL: no external dependency, no auth, and it exercises
-	// the exact code path a real repo would (git supports cloning from a
-	// plain path natively).
-	fixtureRepo, cleanupFixture, err := newFixtureRepo()
-	if err != nil {
-		log.Fatalf("smoketest: create fixture repo: %v", err)
-	}
-	defer cleanupFixture()
-
 	repo := conductor.Repo{
-		Name:     "smoketest-repo",
-		CloneURL: fixtureRepo,
-		// run.tests_lint_build is the real verify Activity now too (see
+		Name:     envOr("SMOKETEST_REPO_NAME", "smoketest-repo"),
+		CloneURL: cloneURL,
+		// run.tests_lint_build is the real verify Activity (see
 		// cmd/worker), so this needs to be an actual shell command, not a
 		// FailVerifyUntilAttempt Go-side switch. It reproduces the exact
 		// same threshold behavior for real, off the FACTORY_ATTEMPT_NUMBER/
 		// FACTORY_FAIL_VERIFY_UNTIL_ATTEMPT env vars verify.Activities sets
 		// on every invocation.
 		TestCommand: `[ "$FACTORY_ATTEMPT_NUMBER" -le "${FACTORY_FAIL_VERIFY_UNTIL_ATTEMPT:-0}" ] && { echo "simulated failure at attempt $FACTORY_ATTEMPT_NUMBER"; exit 1; } || { echo pass; exit 0; }`,
+	}
+
+	// Self-healing, same spirit as the Makefile's `docker compose down -v`
+	// before every run: close+delete any PR/branch a previous run left on
+	// the real target repo for these fixed scenario names, so repeated
+	// dev-loop runs don't accumulate stale PRs. Best-effort — there's
+	// nothing to clean up on a first run.
+	for _, sc := range scenarios() {
+		cleanupPR(repoSlug, gitops.BranchName(sc.workflowID))
 	}
 
 	allPassed := true
@@ -183,53 +200,38 @@ func runScenario(c client.Client, taskQueue string, def workflowdef.Definition, 
 		ok = false
 	}
 
+	// Scenarios that reach merge must have opened a real PR — proves
+	// pr.create_and_link is the real Activity, not the old no-op stub.
+	if sc.wantFinalState == "COMPLETED" {
+		prURL, _ := result.FinalContext["pr_url"].(string)
+		if prURL == "" {
+			fmt.Printf("      %s: FinalContext[pr_url] missing/empty\n", sc.name)
+			ok = false
+		}
+	}
+
 	return ok
 }
 
-// newFixtureRepo creates a throwaway local git repo with one commit on
-// "main", usable directly as a gitops CloneURL. Returns its path and a
-// cleanup func the caller must defer.
-func newFixtureRepo() (string, func(), error) {
-	dir, err := os.MkdirTemp("", "smoketest-fixture-repo-*")
-	if err != nil {
-		return "", nil, err
+// githubRepoSlug extracts "owner/repo" from an https://github.com/... clone
+// URL, for passing to `gh ... --repo`. Only the https form is supported —
+// smoketest tooling doesn't need to handle every URL shape gitops.WorktreeCreate
+// itself is happy to clone from.
+func githubRepoSlug(cloneURL string) (string, error) {
+	const prefix = "https://github.com/"
+	if !strings.HasPrefix(cloneURL, prefix) {
+		return "", fmt.Errorf("SMOKETEST_REPO_CLONE_URL must start with %q for gh pr cleanup to work, got %q", prefix, cloneURL)
 	}
-	cleanup := func() { os.RemoveAll(dir) }
-
-	steps := [][]string{
-		{"init", "-q", "-b", "main"},
-		{"config", "user.email", "smoketest@example.com"},
-		{"config", "user.name", "smoketest"},
+	slug := strings.TrimSuffix(strings.TrimPrefix(cloneURL, prefix), ".git")
+	if slug == "" || !strings.Contains(slug, "/") {
+		return "", fmt.Errorf("SMOKETEST_REPO_CLONE_URL doesn't look like %s<owner>/<repo>[.git], got %q", prefix, cloneURL)
 	}
-	for _, args := range steps {
-		if err := runGit(dir, args...); err != nil {
-			cleanup()
-			return "", nil, err
-		}
-	}
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("smoketest fixture\n"), 0o644); err != nil {
-		cleanup()
-		return "", nil, err
-	}
-	if err := runGit(dir, "add", "README.md"); err != nil {
-		cleanup()
-		return "", nil, err
-	}
-	if err := runGit(dir, "commit", "-q", "-m", "initial"); err != nil {
-		cleanup()
-		return "", nil, err
-	}
-	return dir, cleanup, nil
+	return slug, nil
 }
 
-func runGit(dir string, args ...string) error {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
-	}
-	return nil
+func cleanupPR(repoSlug, branch string) {
+	cmd := exec.Command("gh", "pr", "close", branch, "--repo", repoSlug, "--delete-branch")
+	_ = cmd.Run() // best-effort: "no such PR" on a first run is expected, not an error
 }
 
 func envOr(key, fallback string) string {
