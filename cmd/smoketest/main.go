@@ -30,6 +30,7 @@ import (
 
 	"factory/internal/activities/gitops"
 	"factory/internal/conductor"
+	"factory/internal/harnesslimits"
 	"factory/internal/temporalconn"
 	"factory/internal/workflowdef"
 )
@@ -97,6 +98,14 @@ func main() {
 		log.Fatalf("smoketest: %v", err)
 	}
 
+	// Resolved once here, outside RunWorkflow (which must stay a
+	// deterministic function of its input — see internal/harnesslimits'
+	// doc comment), and threaded into every scenario's RunInput below.
+	harnessLimits, err := harnesslimits.ParseEnv()
+	if err != nil {
+		log.Fatalf("smoketest: %v", err)
+	}
+
 	hostPort := envOr("TEMPORAL_HOST_PORT", "localhost:7233")
 	namespace := envOr("TEMPORAL_NAMESPACE", "default")
 	taskQueue := envOr("TASK_QUEUE", "factory-conductor")
@@ -132,7 +141,7 @@ func main() {
 
 	allPassed := true
 	for _, sc := range scenarios() {
-		ok := runScenario(c, taskQueue, *def, repo, sc)
+		ok := runScenario(c, taskQueue, *def, repo, harnessLimits, sc)
 		if ok {
 			fmt.Printf("PASS  %s\n", sc.name)
 		} else {
@@ -146,7 +155,7 @@ func main() {
 	}
 }
 
-func runScenario(c client.Client, taskQueue string, def workflowdef.Definition, repo conductor.Repo, sc scenario) bool {
+func runScenario(c client.Client, taskQueue string, def workflowdef.Definition, repo conductor.Repo, harnessLimits map[string]int, sc scenario) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -157,6 +166,7 @@ func runScenario(c client.Client, taskQueue string, def workflowdef.Definition, 
 		Definition:             def,
 		FailVerifyUntilAttempt: sc.failVerifyUntilAttempt,
 		Repo:                   repo,
+		HarnessLimits:          harnessLimits,
 	})
 	if err != nil {
 		fmt.Printf("      %s: ExecuteWorkflow: %v\n", sc.name, err)

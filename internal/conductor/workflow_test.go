@@ -471,6 +471,190 @@ func TestRunWorkflowDispatchesCompoundActionSideEffect(t *testing.T) {
 	env.AssertExpectations(t)
 }
 
+func TestRunWorkflowNamedBudgetMaxTokensExhausted(t *testing.T) {
+	env := newTestEnv(t)
+	def := workflowdef.Definition{
+		Workflow: "token-budget-test",
+		Version:  1,
+		Roles:    map[string]workflowdef.Role{"coder": {Harness: "claude-code", Model: "sonnet"}},
+		Budgets:  map[string]workflowdef.Budget{"execute_budget": {MaxTokens: 100}},
+		Steps: []workflowdef.Step{
+			{
+				ID: "execute", Type: workflowdef.StepTypeAgent, Role: "coder",
+				Budget: "execute_budget",
+				On: map[string]workflowdef.Target{
+					"retry":            {StepOrState: "execute"},
+					"budget_exhausted": {StepOrState: "FAILED"},
+				},
+			},
+		},
+	}
+	require.Empty(t, workflowdef.Validate(&def))
+
+	// 60 + 60 = 120 > 100: the 3rd entry must be blocked by
+	// RealBudgetGate.CheckTokenBudget before a 3rd Activity call happens.
+	env.OnActivity(conductor.HarnessInvokeActivityName, mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Outcome: "retry", TokensUsed: 60}, nil).Twice()
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{Definition: def})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var result conductor.RunResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+
+	require.Equal(t, "FAILED", result.FinalState)
+	require.Equal(t, []string{"execute", "execute"}, result.StepsVisited,
+		"the 3rd entry is budget-blocked (MaxTokens) and never appended")
+	env.AssertExpectations(t)
+}
+
+func TestRunWorkflowHarnessLimitTripsToReviewPending(t *testing.T) {
+	env := newTestEnv(t)
+	def := workflowdef.Definition{
+		Workflow: "harness-limit-test",
+		Version:  1,
+		Roles: map[string]workflowdef.Role{
+			"coder": {Harness: "claude-code", Model: "sonnet", Params: map[string]string{"effort": "high"}},
+		},
+		Budgets: map[string]workflowdef.Budget{"loop_budget": {MaxAttempts: 10}},
+		Steps: []workflowdef.Step{
+			{
+				ID: "execute", Type: workflowdef.StepTypeAgent, Role: "coder",
+				Budget: "loop_budget",
+				On: map[string]workflowdef.Target{
+					"retry":            {StepOrState: "execute"},
+					"done":             {StepOrState: "COMPLETED"},
+					"budget_exhausted": {StepOrState: "FAILED"},
+				},
+			},
+		},
+	}
+	require.Empty(t, workflowdef.Validate(&def))
+
+	// A single call already spends more than the configured limit, so the
+	// 2nd entry must be blocked before another Activity call — routed to
+	// REVIEW_PENDING unconditionally, bypassing the step's own "retry" `on:`
+	// mapping entirely (there's no `on:` outcome for this).
+	env.OnActivity(conductor.HarnessInvokeActivityName, mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Outcome: "retry", TokensUsed: 60}, nil).Once()
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(conductor.HumanDecisionSignalName, conductor.HumanDecision{Action: "cancel"})
+	}, time.Minute)
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{
+		Definition:    def,
+		HarnessLimits: map[string]int{"claude-code/sonnet/high": 50},
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var result conductor.RunResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+
+	require.Equal(t, "CANCELLED", result.FinalState)
+	require.Equal(t, []string{"execute"}, result.StepsVisited,
+		"the 2nd entry is harness-limit-blocked before being appended")
+	env.AssertExpectations(t)
+}
+
+func TestRunWorkflowUnconfiguredHarnessComboHasNoLimit(t *testing.T) {
+	env := newTestEnv(t)
+	def := workflowdef.Definition{
+		Workflow: "harness-limit-unconfigured-test",
+		Version:  1,
+		Roles: map[string]workflowdef.Role{
+			"coder": {Harness: "claude-code", Model: "sonnet", Params: map[string]string{"effort": "high"}},
+		},
+		Budgets: map[string]workflowdef.Budget{"loop_budget": {MaxAttempts: 10}},
+		Steps: []workflowdef.Step{
+			{
+				ID: "execute", Type: workflowdef.StepTypeAgent, Role: "coder",
+				Budget: "loop_budget",
+				On: map[string]workflowdef.Target{
+					"retry":            {StepOrState: "execute"},
+					"done":             {StepOrState: "COMPLETED"},
+					"budget_exhausted": {StepOrState: "FAILED"},
+				},
+			},
+		},
+	}
+	require.Empty(t, workflowdef.Validate(&def))
+
+	env.OnActivity(conductor.HarnessInvokeActivityName, mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Outcome: "retry", TokensUsed: 6000}, nil).Once()
+	env.OnActivity(conductor.HarnessInvokeActivityName, mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Outcome: "done", TokensUsed: 6000}, nil).Once()
+
+	// No HarnessLimits set at all — an unconfigured (harness, model,
+	// effort) combination must never be blocked, no matter how much it
+	// spends (opt-in enforcement, not a blanket cap).
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{Definition: def})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var result conductor.RunResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+
+	require.Equal(t, "COMPLETED", result.FinalState)
+	require.Equal(t, []string{"execute", "execute"}, result.StepsVisited)
+	env.AssertExpectations(t)
+}
+
+func TestRunWorkflowHarnessLimitSharedAcrossDifferentRoles(t *testing.T) {
+	env := newTestEnv(t)
+	def := workflowdef.Definition{
+		Workflow: "harness-limit-shared-test",
+		Version:  1,
+		Roles: map[string]workflowdef.Role{
+			"coder":    {Harness: "claude-code", Model: "sonnet", Params: map[string]string{"effort": "high"}},
+			"reviewer": {Harness: "claude-code", Model: "sonnet", Params: map[string]string{"effort": "high"}},
+		},
+		Steps: []workflowdef.Step{
+			{
+				ID: "execute", Type: workflowdef.StepTypeAgent, Role: "coder",
+				On: map[string]workflowdef.Target{"next": {StepOrState: "review"}},
+			},
+			{
+				ID: "review", Type: workflowdef.StepTypeAgent, Role: "reviewer",
+				On: map[string]workflowdef.Target{"verdict": {StepOrState: "COMPLETED"}},
+			},
+		},
+	}
+	require.Empty(t, workflowdef.Validate(&def))
+
+	// execute (role: coder) and review (role: reviewer) share the same
+	// (harness, model, effort) combination despite different roles — the
+	// limit is keyed purely on that combination, so execute's spend alone
+	// must be enough to block review before review's own Activity call.
+	env.OnActivity(conductor.HarnessInvokeActivityName, mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Outcome: "next", TokensUsed: 60}, nil).Once()
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(conductor.HumanDecisionSignalName, conductor.HumanDecision{Action: "cancel"})
+	}, time.Minute)
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{
+		Definition:    def,
+		HarnessLimits: map[string]int{"claude-code/sonnet/high": 50},
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var result conductor.RunResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+
+	require.Equal(t, "CANCELLED", result.FinalState)
+	require.Equal(t, []string{"execute"}, result.StepsVisited,
+		"review is blocked before being appended, purely from execute's spend on the shared combination")
+	env.AssertExpectations(t)
+}
+
 func TestRunWorkflowStartsAtTerminalState(t *testing.T) {
 	env := newTestEnv(t)
 	def := workflowdef.Definition{

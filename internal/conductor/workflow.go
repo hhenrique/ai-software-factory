@@ -8,6 +8,7 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
+	"factory/internal/harnesslimits"
 	"factory/internal/workflowdef"
 )
 
@@ -65,7 +66,7 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 	// RunInput.
 	runID := workflow.GetInfo(ctx).WorkflowExecution.ID
 
-	var gate BudgetGate = NoopBudgetGate{}
+	var gate BudgetGate = RealBudgetGate{}
 
 	runContext := make(map[string]any, len(in.InitialContext))
 	for k, v := range in.InitialContext {
@@ -75,6 +76,13 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 	budgetAttempts := make(map[string]int)
 	budgetTokensSpent := make(map[string]int)
 	budgetHistory := make(map[string][]ActivityOutput)
+
+	// harnessTokensSpent tracks cumulative token spend per (harness, model,
+	// effort) combination for the whole Run — decoupled from step.Budget
+	// (which is per named budget block/loop) and from role (two steps with
+	// different roles that share a (harness, model, effort) combination
+	// share this counter too). See in.HarnessLimits's doc comment.
+	harnessTokensSpent := make(map[string]int)
 	var stepsVisited []string
 
 	recordTransition(eventActx, TransitionEvent{RunID: runID, Workflow: def.Workflow, FromStep: "", ToStep: startID})
@@ -106,6 +114,7 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 			budgetAttempts = make(map[string]int)
 			budgetTokensSpent = make(map[string]int)
 			budgetHistory = make(map[string][]ActivityOutput)
+			harnessTokensSpent = make(map[string]int)
 			if decision.Hint != "" {
 				runContext["human_hint"] = decision.Hint
 			}
@@ -129,6 +138,8 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 		if !ok {
 			return RunResult{}, fmt.Errorf("conductor: step %q not found in definition %q", currentID, def.Workflow)
 		}
+
+		harness, model, params := roleConfig(def, step.Role)
 
 		attemptNumber := 1
 		if step.Budget != "" {
@@ -155,9 +166,26 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 			}
 		}
 
+		// Harness/model/effort circuit breaker (decoupled from step.Budget
+		// and from role — see in.HarnessLimits's doc comment). Unlike the
+		// named-budget check above, there's no step-declared `on:` outcome
+		// for this, so a trip routes unconditionally to REVIEW_PENDING, the
+		// same conservative "escalate to a human" pattern doc 01 uses for
+		// every other exhaustion case.
+		if step.Type == workflowdef.StepTypeAgent {
+			limitKey := harnesslimits.Key(harness, model, params["effort"])
+			if limit, ok := in.HarnessLimits[limitKey]; ok && harnessTokensSpent[limitKey] > limit {
+				recordTransition(eventActx, TransitionEvent{
+					RunID: runID, Workflow: def.Workflow, FromStep: step.ID, ToStep: "REVIEW_PENDING",
+					StepID: step.ID, AttemptNumber: attemptNumber,
+				})
+				currentID = "REVIEW_PENDING"
+				continue
+			}
+		}
+
 		stepsVisited = append(stepsVisited, step.ID)
 
-		harness, model, params := roleConfig(def, step.Role)
 		activityIn := ActivityInput{
 			StepID:        step.ID,
 			Action:        step.Action,
@@ -184,6 +212,9 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 		if step.Budget != "" {
 			budgetTokensSpent[step.Budget] += out.TokensUsed
 			budgetHistory[step.Budget] = append(budgetHistory[step.Budget], out)
+		}
+		if step.Type == workflowdef.StepTypeAgent {
+			harnessTokensSpent[harnesslimits.Key(harness, model, params["effort"])] += out.TokensUsed
 		}
 
 		for k, v := range out.Produced {

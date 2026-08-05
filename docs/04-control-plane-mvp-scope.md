@@ -70,6 +70,35 @@ implementation sits behind a small `Provider` interface
 implementation can replace the env-backed one later without any caller
 changing.
 
+### Accumulating env-config surfaces (tech debt, tracked not solved)
+
+Every setting below is a plain env var read once at process startup, each
+justified individually at the time it was added (repo roots above; harness
+token limits alongside `BudgetGate`; etc.) — but as a set, this is drifting
+toward the exact "config sprawl" the control plane is supposed to replace.
+Listed here so the debt is visible in one place rather than only inside
+each feature's own doc comment:
+
+- `FACTORY_ROOT` — worktree/clone storage root (see above)
+- `SMOKETEST_REPO_CLONE_URL` / `SMOKETEST_REPO_NAME` — the live repo
+  `cmd/smoketest` exercises `pr.create_and_link` against
+- `FACTORY_STUB_HARNESS_INVOKE` — routes `harness.invoke` to a stub
+  instead of a real (billed) harness CLI call
+- `PROJECTION_STORE_DSN` — the projection-store Postgres connection
+- `FACTORY_HARNESS_TOKEN_LIMITS` — per-(harness, model, effort) token
+  circuit-breaker limits (`internal/harnesslimits`), decoupled from role,
+  scoped per-Run
+
+Each of these is deliberately env-backed for now rather than
+control-plane-editable, same trade-off as worktree storage above:
+standing up a real config store + editor UI isn't worth it yet. The
+intended eventual destination is one shared mechanism — a database-backed
+config store with its own small, disposable UI (in the spirit of the
+Runs-visibility page, not a polished settings page) — rather than each
+surface growing its own bespoke migration path independently. Not
+scheduled; revisit once the number of these surfaces (or the pain of
+redeploying to change one) makes the migration cost worth paying.
+
 Fixed layout under `FACTORY_ROOT`:
 - `repos/<repo>.git` — the repo's own clone, shared across every Run
   against it.

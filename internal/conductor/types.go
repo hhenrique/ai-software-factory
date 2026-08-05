@@ -34,6 +34,18 @@ type RunInput struct {
 	// section is unbuilt), so today this is supplied directly by whatever
 	// starts the Run.
 	Repo Repo
+
+	// HarnessLimits caps cumulative token spend per (harness, model,
+	// effort) combination for the whole Run, decoupled from which
+	// role/step uses that combination — e.g. claude-code/sonnet/high can
+	// have a stricter cap than claude-code/sonnet/low, shared across
+	// every step that happens to use it, regardless of role. Keyed by
+	// internal/harnesslimits.Key(harness, model, effort); a combination
+	// absent from the map has no limit. Resolved once by whatever starts
+	// the Run (internal/harnesslimits.ParseEnv) — never looked up inside
+	// RunWorkflow itself, which must stay a deterministic function of its
+	// input.
+	HarnessLimits map[string]int
 }
 
 // Repo is a slice of doc 04's Repository entity: just enough to clone and
