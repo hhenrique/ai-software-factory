@@ -103,6 +103,30 @@ func TestRunWorkflowFinalContextAccumulatesProducedFields(t *testing.T) {
 	require.Equal(t, "some diff", result.FinalContext["diff"])
 }
 
+func TestRunWorkflowToolStepsGetFullContextWithoutDeclaringIt(t *testing.T) {
+	env := newTestEnv(t)
+	def := mustParseDependencyBumpMinimal(t) // verify (type: tool) declares no `context:`
+
+	env.OnActivity("worktree.create", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Produced: map[string]any{"worktree_path": "/tmp/wt"}}, nil).Once()
+	env.OnActivity(conductor.HarnessInvokeActivityName, mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{}, nil).Once()
+	env.OnActivity("run.tests_lint_build", mock.Anything, mock.MatchedBy(func(in conductor.ActivityInput) bool {
+		return in.Context["worktree_path"] == "/tmp/wt"
+	})).Return(conductor.ActivityOutput{Outcome: "pass"}, nil).Once()
+	env.OnActivity("pr.create_and_link", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{}, nil).Once()
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{Definition: def})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	var result conductor.RunResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+	require.Equal(t, "COMPLETED", result.FinalState)
+	env.AssertExpectations(t)
+}
+
 func TestRunWorkflowLoopThenPass(t *testing.T) {
 	env := newTestEnv(t)
 	def := mustParseDependencyBumpMinimal(t)

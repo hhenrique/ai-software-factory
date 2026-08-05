@@ -2,10 +2,11 @@
 // workflow plus the tool/harness Activities, and blocks processing tasks
 // on one task queue until interrupted.
 //
-// Activity registration is stub.Registrations (every Activity) with
-// gitops.Activities.Registrations() layered on top — worktree.create is
-// real (internal/activities/gitops), everything else (run.tests_lint_build,
-// pr.create_and_link, harness.invoke) is still the throwaway stub.
+// Activity registration is stub.Registrations (every Activity) with the
+// real implementations layered on top — worktree.create
+// (internal/activities/gitops) and run.tests_lint_build
+// (internal/activities/verify) are real; pr.create_and_link and
+// harness.invoke are still the throwaway stub.
 package main
 
 import (
@@ -19,6 +20,7 @@ import (
 
 	"factory/internal/activities/gitops"
 	"factory/internal/activities/stub"
+	"factory/internal/activities/verify"
 	"factory/internal/conductor"
 	"factory/internal/repoconfig"
 	"factory/internal/temporalconn"
@@ -44,12 +46,16 @@ func main() {
 	w.RegisterWorkflow(conductor.RunWorkflow)
 
 	gitActivities := &gitops.Activities{Paths: repoconfig.NewEnvProvider()}
+	verifyActivities := &verify.Activities{}
+
 	registrations := make(map[string]any, len(stub.Registrations))
 	for name, fn := range stub.Registrations {
 		registrations[name] = fn
 	}
-	for name, fn := range gitActivities.Registrations() {
-		registrations[name] = fn // overrides the stub's worktree.create
+	for _, real := range []map[string]any{gitActivities.Registrations(), verifyActivities.Registrations()} {
+		for name, fn := range real {
+			registrations[name] = fn // overrides the stub's version of the same name
+		}
 	}
 	for name, fn := range registrations {
 		w.RegisterActivityWithOptions(fn, activity.RegisterOptions{Name: name})

@@ -109,7 +109,7 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 			Action:        step.Action,
 			Role:          step.Role,
 			Harness:       roleHarness(def, step.Role),
-			Context:       snapshotContext(runContext, step.Context),
+			Context:       stepContext(step, runContext),
 			AttemptNumber: attemptNumber,
 			RunID:         runID,
 			Repo:          in.Repo,
@@ -176,6 +176,21 @@ func roleHarness(def workflowdef.Definition, roleName string) string {
 		return ""
 	}
 	return def.Roles[roleName].Harness
+}
+
+// stepContext builds the Context an Activity call receives: the full
+// accumulated Run context for type: tool steps (not token-constrained,
+// may need infrastructure data no step declared — see ActivityInput.Context),
+// or the pruned `context:`-declared subset for type: agent steps.
+func stepContext(step *workflowdef.Step, runContext map[string]any) map[string]any {
+	if step.Type != workflowdef.StepTypeAgent {
+		out := make(map[string]any, len(runContext))
+		for k, v := range runContext {
+			out[k] = v
+		}
+		return out
+	}
+	return snapshotContext(runContext, step.Context)
 }
 
 // snapshotContext returns only the fields a step declared via `context:` —

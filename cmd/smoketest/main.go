@@ -101,7 +101,17 @@ func main() {
 	}
 	defer cleanupFixture()
 
-	repo := conductor.Repo{Name: "smoketest-repo", CloneURL: fixtureRepo}
+	repo := conductor.Repo{
+		Name:     "smoketest-repo",
+		CloneURL: fixtureRepo,
+		// run.tests_lint_build is the real verify Activity now too (see
+		// cmd/worker), so this needs to be an actual shell command, not a
+		// FailVerifyUntilAttempt Go-side switch. It reproduces the exact
+		// same threshold behavior for real, off the FACTORY_ATTEMPT_NUMBER/
+		// FACTORY_FAIL_VERIFY_UNTIL_ATTEMPT env vars verify.Activities sets
+		// on every invocation.
+		TestCommand: `[ "$FACTORY_ATTEMPT_NUMBER" -le "${FACTORY_FAIL_VERIFY_UNTIL_ATTEMPT:-0}" ] && { echo "simulated failure at attempt $FACTORY_ATTEMPT_NUMBER"; exit 1; } || { echo pass; exit 0; }`,
+	}
 
 	allPassed := true
 	for _, sc := range scenarios() {

@@ -43,6 +43,14 @@ type Repo struct {
 	Name          string
 	CloneURL      string
 	DefaultBranch string // empty means "resolve from origin/HEAD"
+
+	// TestCommand is the repo's declared build/test/lint step (doc 04:
+	// "Build / test / lint commands, consumed by the run.tests_lint_build
+	// tool action"), a single shell command run in the Run's worktree.
+	// One combined command rather than three separate fields — sequencing
+	// build vs. test vs. lint is the repo's own tooling's job (e.g. its
+	// Makefile), not the conductor's.
+	TestCommand string
 }
 
 // RunResult is RunWorkflow's return value: the Run's terminal state plus
@@ -70,10 +78,18 @@ type ActivityInput struct {
 	Role    string // agent steps only
 	Harness string // agent steps only; resolved from Definition.Roles[Role]
 
-	// Context carries only the fields the step declared via `context:` —
-	// the conductor computes this diff deterministically so the agent
-	// never has to re-derive information a prior step already produced
-	// (see CLAUDE.md's cardinal rule 1).
+	// Context carries the Run's accumulated context available to this
+	// step. For type: agent steps, only the fields declared via
+	// `context:` — the conductor computes this diff deterministically so
+	// the agent never has to re-derive information a prior step already
+	// produced (CLAUDE.md's cardinal rule 1, which is about token cost).
+	// For type: tool steps, the full accumulated context: doc 02
+	// documents `context:` as an agent-steps-only field precisely because
+	// tool Activities aren't token-constrained (no LLM call) and may need
+	// infrastructure data no step declared, e.g. run.tests_lint_build
+	// needs worktree_path from provision without provision's step id or
+	// output shape being wired through every intermediate step's
+	// `context:` list.
 	Context map[string]any
 
 	// AttemptNumber is this call's 1-based count within the step's budget
