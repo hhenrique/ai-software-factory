@@ -37,6 +37,7 @@ import (
 	"factory/internal/activities/pr"
 	"factory/internal/activities/stub"
 	"factory/internal/activities/verify"
+	"factory/internal/backlog"
 	"factory/internal/conductor"
 	"factory/internal/eventlog"
 	"factory/internal/repoconfig"
@@ -72,6 +73,7 @@ func main() {
 	}
 	defer eventPool.Close()
 	eventActivities := &eventlog.Activities{Pool: eventPool}
+	backlogActivities := &backlog.Activities{Pool: eventPool} // same projection-store instance
 
 	w := worker.New(c, taskQueue, worker.Options{})
 	w.RegisterWorkflow(conductor.RunWorkflow)
@@ -90,6 +92,7 @@ func main() {
 		verifyActivities.Registrations(),
 		prActivities.Registrations(),
 		eventActivities.Registrations(),
+		backlogActivities.Registrations(),
 	}
 	if os.Getenv("FACTORY_STUB_HARNESS_INVOKE") == "" {
 		real = append(real, harnessActivities.Registrations())

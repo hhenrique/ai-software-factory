@@ -9,6 +9,7 @@ package harness
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"factory/internal/conductor"
 )
@@ -79,26 +80,32 @@ var adapters = map[string]adapter{
 // For steps with an output_schema (Planner, Reviewer, coder_response),
 // the harness is asked to emit a JSON block matching that shape, which is
 // then parsed — unparseable output is Malformed, never silently retried
-// (doc 03). For schema-less steps (the Coder's initial EXECUTING pass and
-// revise_verify/revise_review), the harness is expected to edit worktree
-// files directly; this Activity computes the resulting diff itself via
+// (doc 03). For steps whose context declares worktree_path (the Coder's
+// execute/revise_verify/revise_review — Planner and Reviewer don't and
+// shouldn't: they judge a task description or an already-produced diff
+// text, never edit files), the harness runs with that as its cwd and gets
+// real file access; this Activity computes the resulting diff itself via
 // `git add -A` + `git diff --cached` after the harness runs (doc 03: "the
 // conductor can apply" the diff — there's no separate DAG step for
 // applying it, so it happens here, in the same Activity call that invoked
 // the harness) rather than trying to parse a diff out of CLI text output.
+// Steps without worktree_path run with a harmless temp-dir cwd and skip
+// diff computation entirely — there's nothing to commit and nothing to
+// look for.
 func (a *Activities) Invoke(ctx context.Context, in conductor.ActivityInput) (conductor.ActivityOutput, error) {
 	ad, ok := adapters[in.Harness]
 	if !ok {
 		return conductor.ActivityOutput{}, fmt.Errorf("harness: invoke: unknown harness %q", in.Harness)
 	}
 
-	worktreePath, _ := in.Context["worktree_path"].(string)
-	if worktreePath == "" {
-		return conductor.ActivityOutput{}, fmt.Errorf("harness: invoke: worktree_path missing from context")
+	worktreePath, hasWorktree := in.Context["worktree_path"].(string)
+	cwd := worktreePath
+	if !hasWorktree || cwd == "" {
+		cwd = os.TempDir()
 	}
 
 	res, err := ad.invoke(ctx, invocation{
-		WorktreePath: worktreePath,
+		WorktreePath: cwd,
 		Prompt:       buildPrompt(in),
 		Model:        in.Model,
 		Effort:       in.Params["effort"],
@@ -116,20 +123,36 @@ func (a *Activities) Invoke(ctx context.Context, in conductor.ActivityInput) (co
 			return out, nil
 		}
 		out.Produced = parsed
-		if v, ok := parsed["verdict"].(string); ok {
+
+		// If the schema declares a verdict (every schema-driven step in
+		// both reference Workflow Definitions does — it's what route()
+		// looks up), a parsed-but-verdict-less response is just as
+		// unusable for routing as unparseable JSON would be. Found live:
+		// the JSON parsed fine but "verdict" was missing, silently
+		// producing Outcome "" — route() then had no on: mapping for ""
+		// and hard-errored instead of this routing to
+		// on_malformed_output the way doc 03 intends.
+		if _, wantsVerdict := in.OutputSchema["verdict"]; wantsVerdict {
+			v, ok := parsed["verdict"].(string)
+			if !ok || v == "" {
+				out.Malformed = true
+				return out, nil
+			}
 			out.Outcome = v
 		}
 	}
 
-	diff, err := commitWorktreeChanges(ctx, worktreePath, in.StepID, in.AttemptNumber)
-	if err != nil {
-		return conductor.ActivityOutput{}, fmt.Errorf("harness: invoke: %w", err)
-	}
-	if diff != "" {
-		if out.Produced == nil {
-			out.Produced = map[string]any{}
+	if hasWorktree && worktreePath != "" {
+		diff, err := commitWorktreeChanges(ctx, worktreePath, in.StepID, in.AttemptNumber)
+		if err != nil {
+			return conductor.ActivityOutput{}, fmt.Errorf("harness: invoke: %w", err)
 		}
-		out.Produced["diff"] = diff
+		if diff != "" {
+			if out.Produced == nil {
+				out.Produced = map[string]any{}
+			}
+			out.Produced["diff"] = diff
+		}
 	}
 
 	return out, nil

@@ -76,6 +76,17 @@ responsible for:
    format the conductor can apply, regardless of how the harness
    internally represents edits.
 
+   Concretely: a Coder-role harness is given real file access to the
+   Run's worktree (this is *why* these steps declare `worktree_path` in
+   `context:`, unlike Planner/Reviewer, which judge a task description or
+   an already-produced diff and never touch the worktree) and edits files
+   directly, the same way a human would. The conductor never parses a
+   diff out of the harness's own text output — it computes the diff
+   itself deterministically (stage + diff the worktree) after the harness
+   call returns. That's what "the conductor can apply" means in practice:
+   one uniform diff-computation path across every harness, rather than
+   trusting each harness's self-reported patch format.
+
 ## Required structured outputs by step type
 
 These schemas are the contract between the Workflow definition, the

@@ -28,6 +28,19 @@ func TestBuildPromptIncludesFailingTestsDiffOnRetry(t *testing.T) {
 	}
 }
 
+func TestBuildPromptIncludesDiffForReviewer(t *testing.T) {
+	p := buildPrompt(conductor.ActivityInput{
+		Context: map[string]any{
+			"scope_contract": map[string]any{"acceptance_criteria": []string{"x"}},
+			"diff":           "diff --git a/f.txt b/f.txt\n+hello",
+		},
+		OutputSchema: map[string]any{"findings": "array", "verdict": []any{"approved", "changes_required"}},
+	})
+	if !strings.Contains(p, "diff --git a/f.txt b/f.txt") {
+		t.Errorf("prompt %q missing the diff context field — Reviewer has nothing to review without it", p)
+	}
+}
+
 func TestBuildPromptRequestsJSONBlockWhenOutputSchemaPresent(t *testing.T) {
 	p := buildPrompt(conductor.ActivityInput{
 		Context:      map[string]any{"task_description": "plan this"},

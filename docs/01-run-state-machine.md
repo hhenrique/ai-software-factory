@@ -251,6 +251,26 @@ fail before any model call — this is the raw feed for Overview
 aggregation (time-to-green, cost-per-Run, agent-step token ratio; see
 04-control-plane-mvp-scope.md).
 
+## Resuming or cancelling a REVIEW_PENDING Run
+
+Doc 05's signal-wait needs a payload contract; this is it, at the domain
+level (see 05-architecture-temporal.md for how it maps onto a Temporal
+signal).
+
+A human (or whatever control-plane surface acts on their behalf) resolves
+a Run parked at `REVIEW_PENDING` with one of two decisions:
+
+- **resume** — names the state/step to continue the Run from, plus an
+  optional hint (free text, not structured/validated by the state
+  machine). There is no automatic resume target: different escalation
+  reasons plausibly need different resume points (a disputed finding
+  might resume at `REVIEWING` with a hint resolving the dispute; a
+  Planner escalation might resume at `EXECUTING` with clarified scope).
+  Guessing the target automatically risks resuming into the wrong part of
+  the loop; naming it explicitly is simpler and doesn't need the state
+  machine to infer which escalation implies which resume point.
+- **cancel** — terminates the Run as `CANCELLED`.
+
 ## Budget reset on human-resumed Runs
 
 When a human resumes a Run from `REVIEW_PENDING` with a hint, **all** of the

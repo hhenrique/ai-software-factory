@@ -149,6 +149,19 @@ The Task backlog / intake.
   signal that scope contracts for that area are too narrow, or the code
   needs dedicated attention)
 
+#### Out-of-scope Task creation, current state
+
+The `task.create` compound action (01-run-state-machine.md's out-of-scope
+finding path) is implemented today as a direct write to a `backlog_tasks`
+table in the projection store (`internal/backlog`) — real, not a
+placeholder: an out-of-scope finding genuinely becomes a queryable row,
+tagged with its Run id and source, the moment `coder_response` routes
+through it. What's *not* built yet is everything else this section
+describes: no priority, no assigned Workflow, no triage UI, and no
+`auto-generated:review-finding` source tag distinct from a plain
+`source` string. Treat `backlog_tasks` as the seed of the real Task
+entity, not the entity itself.
+
 ### Workflows
 
 - List of Workflow definitions (id, current version hash, trigger

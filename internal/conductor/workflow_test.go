@@ -3,6 +3,7 @@ package conductor_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -312,6 +313,17 @@ func TestRunWorkflowMalformedOutputRouting(t *testing.T) {
 	env.OnActivity(conductor.HarnessInvokeActivityName, mock.Anything, mock.Anything).
 		Return(conductor.ActivityOutput{Malformed: true}, nil).Once()
 
+	// REVIEW_PENDING now genuinely blocks on a signal (doc 05's
+	// signal-wait) rather than returning immediately, so this test needs
+	// to send a decision — a "cancel" here, since the point of this test
+	// is proving malformed output routes to the REVIEW_PENDING gate at
+	// all, not exercising resume (see the dedicated signal-wait tests
+	// below). Reaching CANCELLED is only possible by first passing
+	// through REVIEW_PENDING, so it still proves the routing.
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(conductor.HumanDecisionSignalName, conductor.HumanDecision{Action: "cancel"})
+	}, time.Minute)
+
 	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{Definition: def})
 
 	require.True(t, env.IsWorkflowCompleted())
@@ -320,8 +332,142 @@ func TestRunWorkflowMalformedOutputRouting(t *testing.T) {
 	var result conductor.RunResult
 	require.NoError(t, env.GetWorkflowResult(&result))
 
-	require.Equal(t, "REVIEW_PENDING", result.FinalState)
+	require.Equal(t, "CANCELLED", result.FinalState)
 	require.Equal(t, []string{"plan"}, result.StepsVisited)
+	env.AssertExpectations(t)
+}
+
+func TestRunWorkflowReviewPendingCancelViaSignal(t *testing.T) {
+	env := newTestEnv(t)
+	def := workflowdef.Definition{
+		Workflow: "cancel-test",
+		Version:  1,
+		Steps: []workflowdef.Step{
+			{
+				ID: "verify", Type: workflowdef.StepTypeTool, Action: "run.tests_lint_build",
+				On: map[string]workflowdef.Target{"pass": {StepOrState: "COMPLETED"}, "fail": {StepOrState: "REVIEW_PENDING"}},
+			},
+		},
+	}
+	require.Empty(t, workflowdef.Validate(&def))
+
+	env.OnActivity("run.tests_lint_build", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Outcome: "fail"}, nil).Once()
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(conductor.HumanDecisionSignalName, conductor.HumanDecision{Action: "cancel"})
+	}, time.Minute)
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{Definition: def})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var result conductor.RunResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+	require.Equal(t, "CANCELLED", result.FinalState)
+	env.AssertExpectations(t)
+}
+
+func TestRunWorkflowResumeResetsAllBudgetCountersAndMergesHint(t *testing.T) {
+	env := newTestEnv(t)
+	def := workflowdef.Definition{
+		Workflow: "resume-budget-reset",
+		Version:  1,
+		Budgets:  map[string]workflowdef.Budget{"verify_rounds": {MaxAttempts: 1}},
+		Steps: []workflowdef.Step{
+			{
+				ID: "verify", Type: workflowdef.StepTypeTool, Action: "run.tests_lint_build",
+				Budget: "verify_rounds",
+				On: map[string]workflowdef.Target{
+					"pass": {StepOrState: "COMPLETED"},
+					"fail": {StepOrState: "REVIEW_PENDING"},
+				},
+			},
+		},
+	}
+	require.Empty(t, workflowdef.Validate(&def))
+
+	var attemptNumbers []int
+	env.OnActivity("run.tests_lint_build", mock.Anything, mock.Anything).
+		Return(func(ctx context.Context, in conductor.ActivityInput) (conductor.ActivityOutput, error) {
+			attemptNumbers = append(attemptNumbers, in.AttemptNumber)
+			if len(attemptNumbers) == 1 {
+				return conductor.ActivityOutput{Outcome: "fail"}, nil
+			}
+			return conductor.ActivityOutput{Outcome: "pass"}, nil
+		}).Twice()
+
+	// Reaching REVIEW_PENDING here is via the "fail" outcome directly
+	// (max_attempts:1 means the very first failure already exhausts the
+	// budget's own attempt count, but this test signals resume before
+	// that path is even reached — it's exercising resume's reset, not
+	// the budget_exhausted route).
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(conductor.HumanDecisionSignalName, conductor.HumanDecision{
+			Action: "resume", ResumeStepID: "verify", Hint: "try again",
+		})
+	}, time.Minute)
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{Definition: def})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var result conductor.RunResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+
+	require.Equal(t, "COMPLETED", result.FinalState)
+	require.Equal(t, []int{1, 1}, attemptNumbers,
+		"budget counter must reset to zero-spent on resume (doc 01), so the post-resume call is attempt 1 again, not 2")
+	require.Equal(t, "try again", result.FinalContext["human_hint"])
+	env.AssertExpectations(t)
+}
+
+func TestRunWorkflowDispatchesCompoundActionSideEffect(t *testing.T) {
+	env := newTestEnv(t)
+	env.RegisterActivityWithOptions(placeholderActivity, activity.RegisterOptions{
+		Name:                          "task.create",
+		DisableAlreadyRegisteredCheck: true,
+	})
+
+	def := workflowdef.Definition{
+		Workflow: "out-of-scope-test",
+		Version:  1,
+		Roles:    map[string]workflowdef.Role{"coder": {Harness: "claude-code", Model: "x"}},
+		Steps: []workflowdef.Step{
+			{
+				ID: "coder_response", Type: workflowdef.StepTypeAgent, Role: "coder",
+				OutputSchema: map[string]any{"verdict": []any{"address", "dispute", "escalate", "out_of_scope"}},
+				On: map[string]workflowdef.Target{
+					"address":      {StepOrState: "COMPLETED"},
+					"dispute":      {StepOrState: "FAILED"},
+					"escalate":     {StepOrState: "FAILED"},
+					"out_of_scope": {Action: "task.create(source=review-finding)", Next: "COMPLETED"},
+				},
+				OnMalformedOutput: "FAILED",
+			},
+		},
+	}
+	require.Empty(t, workflowdef.Validate(&def))
+
+	env.OnActivity(conductor.HarnessInvokeActivityName, mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Outcome: "out_of_scope"}, nil).Once()
+	env.OnActivity("task.create", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Produced: map[string]any{"spawned_task_id": "task-abc-123"}}, nil).Once()
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{Definition: def})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var result conductor.RunResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+
+	require.Equal(t, "COMPLETED", result.FinalState)
+	require.Equal(t, "task-abc-123", result.FinalContext["spawned_task_id"])
+	require.Equal(t, []string{"coder_response"}, result.StepsVisited,
+		"task.create is a side-effect dispatch inside route(), not its own DAG step visit")
 	env.AssertExpectations(t)
 }
 

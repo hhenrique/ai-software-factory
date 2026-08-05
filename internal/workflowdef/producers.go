@@ -8,20 +8,23 @@ package workflowdef
 var defaultToolActionProducedFields = map[string][]string{
 	"run.tests_lint_build": {"failing_tests_diff"},
 	"worktree.create":      {"worktree_path", "branch", "clone_dir"},
+	"task.create":          {"spawned_task_id"},
 }
 
 // defaultAlwaysAvailableFields are fields available from the start of a
 // Run without being any step's Produced output — either conductor-computed
 // (e.g. doc 01's pruned "open items" view of the review conversation, a
-// projection over all findings raised so far) or a Run-level input (doc
-// 02 rule 5: "either part of the immutable Run context set in an earlier
-// step's output, or a Run-level input"), supplied via RunInput.InitialContext
-// by whatever starts the Run (e.g. task_description, the Task's
-// description/acceptance intent a Coder step needs — there's no
-// persisted Task entity yet, so this is supplied directly for now).
+// projection over all findings raised so far; or human_hint, merged into
+// context by RunWorkflow when a human resumes a Run from REVIEW_PENDING —
+// see conductor.HumanDecision) or a Run-level input (doc 02 rule 5:
+// "either part of the immutable Run context set in an earlier step's
+// output, or a Run-level input"), supplied via RunInput.InitialContext by
+// whatever starts the Run (e.g. task_description — there's no persisted
+// Task entity yet, so this is supplied directly for now).
 var defaultAlwaysAvailableFields = []string{
 	"conversation_open_items",
 	"task_description",
+	"human_hint",
 }
 
 // producedFields returns the context field names step s makes available to

@@ -15,6 +15,11 @@ const HarnessInvokeActivityName = "harness.invoke"
 // transition emits a structured event"). See internal/eventlog.
 const RecordEventActivityName = "conductor.record_event"
 
+// HumanDecisionSignalName is the signal RunWorkflow blocks on when a Run
+// reaches REVIEW_PENDING (doc 05: signal-wait, preferred over polling).
+// See HumanDecision.
+const HumanDecisionSignalName = "human_decision"
+
 // activityNameFor maps a step to the Temporal Activity name that executes
 // it: a tool step's own action identifier (e.g. "worktree.create"), or
 // HarnessInvokeActivityName for every agent step. Doc 05: "the conductor

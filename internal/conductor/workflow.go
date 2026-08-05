@@ -2,6 +2,7 @@ package conductor
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"go.temporal.io/sdk/temporal"
@@ -80,6 +81,41 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 
 	currentID := startID
 	for {
+		if currentID == "REVIEW_PENDING" {
+			decision, err := waitForHumanDecision(ctx)
+			if err != nil {
+				return RunResult{}, err
+			}
+
+			if decision.Action == "cancel" {
+				recordTransition(eventActx, TransitionEvent{
+					RunID: runID, Workflow: def.Workflow, FromStep: "REVIEW_PENDING", ToStep: "CANCELLED",
+				})
+				return RunResult{
+					FinalState:   "CANCELLED",
+					StepsVisited: stepsVisited,
+					BudgetSpent:  budgetAttempts,
+					FinalContext: runContext,
+				}, nil
+			}
+
+			// Resume: doc 01 — "all of the Run's budget counters reset to
+			// zero-spent, not just the one tied to whichever loop
+			// escalated." A partial reset would leave stale counters in
+			// loops the hint never touched.
+			budgetAttempts = make(map[string]int)
+			budgetTokensSpent = make(map[string]int)
+			budgetHistory = make(map[string][]ActivityOutput)
+			if decision.Hint != "" {
+				runContext["human_hint"] = decision.Hint
+			}
+			recordTransition(eventActx, TransitionEvent{
+				RunID: runID, Workflow: def.Workflow, FromStep: "REVIEW_PENDING", ToStep: decision.ResumeStepID,
+			})
+			currentID = decision.ResumeStepID
+			continue
+		}
+
 		if workflowdef.IsTerminalState(currentID) {
 			return RunResult{
 				FinalState:   currentID,
@@ -106,7 +142,7 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 				!gate.CheckOscillation(step.ID, budgetHistory[step.Budget])
 
 			if exhausted {
-				dest, err := route(step, "budget_exhausted")
+				dest, err := route(actx, runID, step, "budget_exhausted", runContext)
 				if err != nil {
 					return RunResult{}, fmt.Errorf("conductor: step %q: budget %q exhausted but %w", step.ID, step.Budget, err)
 				}
@@ -166,7 +202,7 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 			continue
 		}
 
-		dest, err := route(step, out.Outcome)
+		dest, err := route(actx, runID, step, out.Outcome, runContext)
 		if err != nil {
 			return RunResult{}, err
 		}
@@ -197,7 +233,13 @@ func recordTransition(ctx workflow.Context, ev TransitionEvent) {
 // validateOutcomes) — this lookup is the runtime safety net for every
 // other case: an outcome with no mapping hard-errors here rather than
 // routing somewhere undefined.
-func route(step *workflowdef.Step, outcome string) (string, error) {
+//
+// A compound target (doc 02: `{ action: ..., next: ... }`, e.g.
+// coder_response's out_of_scope) dispatches its action as an ordinary
+// Activity call before routing — a side effect, so it needs actx/runID
+// and gets to read/merge into runContext the same way a step's own
+// Activity call does.
+func route(actx workflow.Context, runID string, step *workflowdef.Step, outcome string, runContext map[string]any) (string, error) {
 	if step.Next != "" {
 		return step.Next, nil
 	}
@@ -205,11 +247,83 @@ func route(step *workflowdef.Step, outcome string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("no on: mapping for outcome %q", outcome)
 	}
-	// TODO: dispatch t.Action for side-effecting targets (e.g.
-	// task.create(...)) before routing — not exercised this slice since
-	// only dependency-bump-minimal runs live, and it has no compound
-	// targets.
+	if t.HasSideEffect() {
+		if err := dispatchAction(actx, runID, step.ID, t.Action, runContext); err != nil {
+			return "", fmt.Errorf("step %q: side-effecting action %q: %w", step.ID, t.Action, err)
+		}
+	}
 	return t.Destination(), nil
+}
+
+// dispatchAction runs a compound target's action string (e.g.
+// "task.create(source=review-finding)") as an Activity call, merging its
+// Produced fields into runContext the same way a step's own output is
+// merged. The only action this package knows about today is task.create —
+// doc 04's Work section (a real Task/backlog entity) is otherwise
+// unbuilt, so this is a minimal real implementation (a projection-store
+// row via internal/backlog), not a placeholder: it genuinely records the
+// out-of-scope finding as a queryable backlog item, just without the rest
+// of doc 04's Task machinery (priority, assigned Workflow, a UI to triage
+// it) built out yet.
+func dispatchAction(actx workflow.Context, runID, stepID, action string, runContext map[string]any) error {
+	name, params := parseActionCall(action)
+
+	activityIn := ActivityInput{
+		StepID: stepID,
+		RunID:  runID,
+		Context: map[string]any{
+			"source":           params["source"],
+			"task_description": runContext["task_description"],
+			"findings":         runContext["findings"],
+		},
+	}
+
+	var out ActivityOutput
+	if err := workflow.ExecuteActivity(actx, name, activityIn).Get(actx, &out); err != nil {
+		return err
+	}
+	for k, v := range out.Produced {
+		runContext[k] = v
+	}
+	return nil
+}
+
+// parseActionCall parses "name(key=value, key2=value2)" into its name and
+// param map. Doc 02's only example is "task.create(source=review-finding)" —
+// this is a minimal parser for exactly that shape, not a general
+// expression language.
+func parseActionCall(s string) (name string, params map[string]string) {
+	open := strings.Index(s, "(")
+	if open < 0 {
+		return s, nil
+	}
+	name = s[:open]
+	inner := strings.TrimSuffix(s[open+1:], ")")
+	params = map[string]string{}
+	if inner == "" {
+		return name, params
+	}
+	for _, part := range strings.Split(inner, ",") {
+		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
+		if len(kv) == 2 {
+			params[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
+		}
+	}
+	return name, params
+}
+
+// waitForHumanDecision blocks on HumanDecisionSignalName — doc 05's
+// signal-wait, preferred over polling for REVIEW_PENDING. Indefinite:
+// there's no timeout, since "wait for a human" has no natural deadline,
+// and a durable Temporal signal-wait costs nothing while parked (unlike a
+// polling loop would).
+func waitForHumanDecision(ctx workflow.Context) (HumanDecision, error) {
+	var decision HumanDecision
+	workflow.GetSignalChannel(ctx, HumanDecisionSignalName).Receive(ctx, &decision)
+	if decision.Action == "resume" && decision.ResumeStepID == "" {
+		return HumanDecision{}, fmt.Errorf("conductor: human_decision signal: action=resume requires resume_step_id")
+	}
+	return decision, nil
 }
 
 func roleConfig(def workflowdef.Definition, roleName string) (harness, model string, params map[string]string) {

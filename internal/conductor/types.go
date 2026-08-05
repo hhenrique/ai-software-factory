@@ -69,6 +69,29 @@ type RunResult struct {
 	FinalContext map[string]any
 }
 
+// HumanDecision is the payload of HumanDecisionSignalName — how a human
+// resumes or terminates a Run parked at REVIEW_PENDING. Doc 01 says a
+// human "resumes a Run from REVIEW_PENDING with a hint" but doesn't
+// specify the resume mechanics; this is the resolution: the human (or
+// whatever control-plane surface acts on their behalf) names the step to
+// resume at directly, since only they/it know where the escalation should
+// continue from.
+type HumanDecision struct {
+	// Action is "resume" or "cancel".
+	Action string
+
+	// ResumeStepID is required when Action is "resume" — the step id to
+	// continue the Run at. Not validated against the Definition here; an
+	// invalid id surfaces the same way any other unknown step id does
+	// (RunWorkflow's step lookup).
+	ResumeStepID string
+
+	// Hint is merged into the Run's context as "human_hint" on resume,
+	// available to any step that declares it in `context:` (or any tool
+	// step, which gets full context regardless).
+	Hint string
+}
+
 // ActivityInput is the normalized input every Activity this package
 // invokes receives, regardless of whether the step is type: tool or
 // type: agent.

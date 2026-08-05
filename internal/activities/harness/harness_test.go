@@ -48,6 +48,9 @@ case "$FAKE_CLI_MODE" in
   schema)
     echo '{"is_error":false,"result":"Here you go:\n\n` + fence + `json\n{\"verdict\":\"proceed\",\"scope_contract\":{\"acceptance_criteria\":[\"x\"]}}\n` + fence + `","usage":{"input_tokens":5,"output_tokens":7,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}'
     ;;
+  schema-no-verdict)
+    echo '{"is_error":false,"result":"Here you go:\n\n` + fence + `json\n{\"scope_contract\":{\"acceptance_criteria\":[\"x\"]}}\n` + fence + `","usage":{"input_tokens":5,"output_tokens":7,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}'
+    ;;
   malformed)
     echo '{"is_error":false,"result":"sure, doing that now","usage":{"input_tokens":1,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}'
     ;;
@@ -140,6 +143,37 @@ func TestInvokeMalformedOutputWhenSchemaExpectedButNotJSON(t *testing.T) {
 	}
 }
 
+// TestInvokeMalformedWhenVerdictMissingFromOtherwiseValidJSON is a
+// regression test: found live against a real Reviewer response — the
+// harness's JSON parsed fine, but had no "verdict" key. That must route
+// through on_malformed_output like any other unparseable response, not
+// silently produce Outcome "" (which route() then can't find an on:
+// mapping for, hard-erroring the whole Run instead of the intended
+// conservative malformed-output routing).
+func TestInvokeMalformedWhenVerdictMissingFromOtherwiseValidJSON(t *testing.T) {
+	requireGit(t)
+	writeFakeCLI(t, "claude")
+	t.Setenv("FAKE_CLI_MODE", "schema-no-verdict")
+
+	dir := newFixtureWorktree(t)
+	a := &Activities{}
+	out, err := a.Invoke(context.Background(), conductor.ActivityInput{
+		StepID:       "plan",
+		Harness:      "claude-code",
+		Context:      map[string]any{"worktree_path": dir},
+		OutputSchema: map[string]any{"verdict": []any{"proceed", "reject"}, "scope_contract": "object"},
+	})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if !out.Malformed {
+		t.Errorf("Malformed = false, want true when the parsed JSON has no verdict field")
+	}
+	if out.Outcome != "" {
+		t.Errorf("Outcome = %q, want empty on malformed output", out.Outcome)
+	}
+}
+
 func TestInvokeHarnessErrorResultIsAnActivityError(t *testing.T) {
 	requireGit(t)
 	writeFakeCLI(t, "claude")
@@ -168,11 +202,33 @@ func TestInvokeUnknownHarness(t *testing.T) {
 	}
 }
 
-func TestInvokeMissingWorktreePath(t *testing.T) {
+// TestInvokeWithoutWorktreePathSkipsDiffButStillWorks covers the
+// Planner/Reviewer shape: no worktree_path in context (they judge a task
+// description or an already-produced diff string, never edit files) —
+// this must not error, and must not attempt a worktree diff commit at all
+// (there's no worktree to commit in).
+func TestInvokeWithoutWorktreePathSkipsDiffButStillWorks(t *testing.T) {
+	writeFakeCLI(t, "claude")
+	t.Setenv("FAKE_CLI_MODE", "schema")
+
 	a := &Activities{}
-	_, err := a.Invoke(context.Background(), conductor.ActivityInput{Harness: "claude-code"})
-	if err == nil {
-		t.Fatalf("expected an error for missing worktree_path")
+	out, err := a.Invoke(context.Background(), conductor.ActivityInput{
+		StepID:       "plan",
+		Harness:      "claude-code",
+		Context:      map[string]any{"task_description": "plan this"},
+		OutputSchema: map[string]any{"verdict": []any{"proceed", "reject", "escalate"}, "scope_contract": "object"},
+	})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if out.Malformed {
+		t.Fatalf("Malformed = true, want false")
+	}
+	if out.Outcome != "proceed" {
+		t.Errorf("Outcome = %q, want proceed", out.Outcome)
+	}
+	if _, ok := out.Produced["diff"]; ok {
+		t.Errorf("Produced should not contain diff when there's no worktree_path, got %+v", out.Produced)
 	}
 }
 

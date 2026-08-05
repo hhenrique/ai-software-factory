@@ -33,6 +33,12 @@ func buildPrompt(in conductor.ActivityInput) string {
 		}
 	}
 
+	if diff, ok := in.Context["diff"].(string); ok && diff != "" {
+		b.WriteString("Diff to review:\n\n")
+		b.WriteString(diff)
+		b.WriteString("\n\n")
+	}
+
 	if findings, ok := in.Context["findings"]; ok {
 		if findingsJSON, err := json.MarshalIndent(findings, "", "  "); err == nil {
 			b.WriteString("Review findings to respond to:\n")
