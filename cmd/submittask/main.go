@@ -15,6 +15,11 @@
 // because Coder/Reviewer in the doc 02 reference definition
 // (issue-to-pr-standard) are Codex/Copilot CLI, and this deployment only
 // has Claude Code credits — see that file's own doc comment.
+//
+// -repo <identity> looks up a repository registered via cmd/controlplane
+// (internal/repositories) instead of spelling out -repo-clone-url/
+// -test-command/-workflow every time — the first real consumer of that
+// registry, not just its UI.
 package main
 
 import (
@@ -35,28 +40,53 @@ import (
 	"factory/internal/conductor"
 	"factory/internal/eventlog"
 	"factory/internal/harnesslimits"
+	"factory/internal/repositories"
 	"factory/internal/temporalconn"
 	"factory/internal/workflowdef"
 )
 
 func main() {
-	repoCloneURL := flag.String("repo-clone-url", "", "HTTPS GitHub clone URL of the target repo (required)")
+	repoLookup := flag.String("repo", "", "look up a registered repository by canonical identity (e.g. github.com/owner/repo) — see cmd/controlplane. Supplies -repo-clone-url/-test-command/-workflow's defaults; any of those flags still overrides its value")
+	repoCloneURL := flag.String("repo-clone-url", "", "HTTPS GitHub clone URL of the target repo (required unless -repo is given)")
 	repoName := flag.String("repo-name", "", "short name for the repo (default: derived from clone URL)")
-	testCommand := flag.String("test-command", "", "shell command run in the worktree for VERIFYING (required, repo-specific)")
-	workflowFile := flag.String("workflow", "workflows/issue-to-pr-claude-only.yaml", "path to the Workflow Definition YAML to run")
+	testCommand := flag.String("test-command", "", "shell command run in the worktree for VERIFYING (required unless -repo supplies one)")
+	workflowFile := flag.String("workflow", "", "path to the Workflow Definition YAML to run (default: the registered repo's default_workflow, else workflows/issue-to-pr-claude-only.yaml)")
 	githubIssue := flag.Int("github-issue", 0, "GitHub issue number to use as the task description (mutually exclusive with -description)")
 	description := flag.String("description", "", "free-text task description (mutually exclusive with -github-issue)")
 	runIDOverride := flag.String("run-id", "", "override the generated Run id (default: derived + timestamped)")
 	flag.Parse()
 
-	if *repoCloneURL == "" {
-		log.Fatalf("submittask: -repo-clone-url is required")
-	}
-	if *testCommand == "" {
-		log.Fatalf("submittask: -test-command is required — VERIFYING needs a real command for this repo")
+	if *repoLookup == "" && *repoCloneURL == "" {
+		log.Fatalf("submittask: either -repo or -repo-clone-url is required")
 	}
 	if (*githubIssue == 0) == (*description == "") {
 		log.Fatalf("submittask: exactly one of -github-issue or -description is required")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	pool, err := eventlog.NewPool(ctx)
+	if err != nil {
+		log.Fatalf("submittask: connect to projection store: %v", err)
+	}
+	defer pool.Close()
+
+	if *repoLookup != "" {
+		repo, err := repositories.Get(ctx, pool, *repoLookup)
+		if err != nil {
+			log.Fatalf("submittask: -repo %q: %v", *repoLookup, err)
+		}
+		if !repo.Enabled {
+			log.Fatalf("submittask: repository %q is disabled", *repoLookup)
+		}
+		*repoCloneURL, *testCommand, *workflowFile = resolveRepoConfig(repo, *repoCloneURL, *testCommand, *workflowFile)
+	}
+	if *workflowFile == "" {
+		*workflowFile = defaultWorkflowFile
+	}
+	if *testCommand == "" {
+		log.Fatalf("submittask: -test-command is required — VERIFYING needs a real command for this repo (the registered repository, if any, has none set)")
 	}
 
 	repoSlug, err := gitops.GitHubSlug(*repoCloneURL)
@@ -91,15 +121,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("submittask: %v", err)
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-
-	pool, err := eventlog.NewPool(ctx)
-	if err != nil {
-		log.Fatalf("submittask: connect to projection store: %v", err)
-	}
-	defer pool.Close()
 
 	taskID, err := backlog.InsertHumanTask(ctx, pool, repoSlug, def.Workflow, taskDescription)
 	if err != nil {
@@ -177,6 +198,32 @@ func fetchGitHubIssue(repoSlug string, number int) (string, error) {
 	}
 
 	return fmt.Sprintf("%s\n\n%s\n\nSource: %s", issue.Title, issue.Body, issue.URL), nil
+}
+
+// defaultWorkflowFile is the fallback when neither -workflow nor a
+// registered repository's default_workflow is set.
+const defaultWorkflowFile = "workflows/issue-to-pr-claude-only.yaml"
+
+// resolveRepoConfig merges a registered repository's config with explicit
+// flag values — an explicit, non-empty flag always wins over the
+// registered value, so -repo is a convenience default, not a hard
+// override. Extracted from main for testability: main() itself parses
+// flags and calls log.Fatalf on error, both awkward to exercise directly
+// in a unit test.
+func resolveRepoConfig(repo repositories.Repository, cloneURL, testCommand, workflowFile string) (resolvedCloneURL, resolvedTestCommand, resolvedWorkflowFile string) {
+	resolvedCloneURL = cloneURL
+	if resolvedCloneURL == "" {
+		resolvedCloneURL = repo.CloneURL
+	}
+	resolvedTestCommand = testCommand
+	if resolvedTestCommand == "" {
+		resolvedTestCommand = repo.TestCommand
+	}
+	resolvedWorkflowFile = workflowFile
+	if resolvedWorkflowFile == "" {
+		resolvedWorkflowFile = repo.DefaultWorkflow
+	}
+	return resolvedCloneURL, resolvedTestCommand, resolvedWorkflowFile
 }
 
 // generateRunID builds a readable, collision-resistant Run id — unlike

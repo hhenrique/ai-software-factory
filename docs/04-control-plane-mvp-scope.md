@@ -56,6 +56,28 @@ Explicitly deferred: per-repo custom indexing/RAG configuration as a
 control-plane-managed setting — if this already exists as separate
 tooling, reference it, don't rebuild its config surface here.
 
+#### Current state: `cmd/controlplane`, first real UI slice
+
+Repositories is the first section built as a real vertical slice — not a
+disposable tool like `cmd/runsview` (see that command's doc comment: it's
+explicitly meant to be deleted/replaced wholesale, this one isn't).
+`cmd/controlplane` is a small SPA (one HTML shell, vanilla JS against a
+JSON API, no framework/build step) with a collapsible left-side nav
+structured to grow one section at a time; today only Repositories is
+wired into that nav. Persistence is a new `repositories` table in the
+projection store (`internal/repositories`), covering exactly the fields
+`cmd/submittask` already needs and no more: name (canonical identity,
+e.g. `github.com/hhenrique/toy-repo`), clone URL, test command, default
+workflow, and an enabled flag. `in_scope_paths`/branching-policy fields
+above remain unbuilt — added when a caller actually needs them, same
+incremental-growth precedent as `backlog_tasks`.
+
+This is a real second consumer, not just a form that writes into a
+table nothing reads: `cmd/submittask -repo <identity>` looks a
+repository up and uses its clone URL/test command/default workflow as
+defaults (explicit flags still override). A disabled repository is a
+kill switch — `submittask` refuses to start a Run against one.
+
 ### Worktree storage
 
 Where a repo's clone and a Run's worktree live on disk is **not** a
@@ -239,6 +261,13 @@ view that would actually depend on `status` being accurate.
   02-workflow-definition-schema.md) surfaced before a Workflow can be
   made active
 
+Not built yet — still YAML files on disk (`workflows/`,
+`internal/workflowdef/fixtures`), no `cmd/controlplane` nav entry.
+Unlike Repositories, this needs no new persistence: a Workflow
+Definition is already checked-in YAML, so this slice is a read-only scan
++ parse + validate of `workflows/`, surfaced the same way `cmd/submittask`
+already validates a definition before using it.
+
 ### Workers (Roles)
 
 - List of configured roles (name, harness, model/endpoint)
@@ -247,6 +276,12 @@ view that would actually depend on `status` being accurate.
 - Concurrency limits, if needed to avoid multiple Runs on the same repo
   causing merge-conflict storms — start with a simple per-repo
   concurrency cap, not a general scheduling system
+
+Not built yet — Roles live inline in each Workflow Definition's `roles:`
+block (02-workflow-definition-schema.md), not a standalone registry, so
+this slice would be a derived read-only view (aggregate `roles:` across
+every known Workflow Definition) rather than its own table, same as the
+Workflows section above.
 
 ## Explicitly out of scope for MVP (see 00-vision-and-principles.md)
 

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>factory control plane</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="app-shell">
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <span class="sidebar-title">factory</span>
+      <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Collapse menu" title="Collapse menu">&laquo;</button>
+    </div>
+    <ul class="nav-list" id="nav-list">
+      <!-- populated by app.js from the views registry, so adding a new
+           slice later is one entry in that registry, not an HTML edit -->
+    </ul>
+  </nav>
+  <main class="main">
+    <header class="topbar">
+      <h1 class="topbar-title" id="topbar-title">&nbsp;</h1>
+    </header>
+    <div class="content" id="content">
+      <!-- populated by app.js -->
+    </div>
+  </main>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
