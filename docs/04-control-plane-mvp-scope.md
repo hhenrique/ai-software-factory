@@ -99,6 +99,42 @@ serialized with a per-repo advisory lock (`flock`, not a "check whether a
 lock file exists" convention — the latter isn't atomic and leaks on a
 crash).
 
+### Smoke-test strategy
+
+Current state: the smoke test (`cmd/smoketest`) exercises `worktree.create`,
+`run.tests_lint_build`, and `pr.create_and_link` for real against a real
+repo (`SMOKETEST_REPO_CLONE_URL`/`SMOKETEST_REPO_NAME`). `harness.invoke`
+stays on the stub by default (`FACTORY_STUB_HARNESS_INVOKE`, always set by
+`make smoketest`) — unlike the other three, every real harness call costs
+API credits, so routine runs stay free rather than following the
+ship-what-we-test precedent unconditionally. This means today's smoke
+test only proves the straight-line DAG mechanics and the budget-counter
+loop shape (via the stub's synthetic pass/fail), not that a real harness
+can actually converge through the state machine's inner loops (EXECUTING
+↔ VERIFYING, REVIEWING ↔ REVISING — see 01-run-state-machine.md).
+
+**Future direction, not built yet**: a dedicated, maintained test repo
+(in the spirit of `toy-repo`, which was used as the workbench for
+building `pr.create_and_link` and `harness.invoke`) with a small set of
+predefined, deterministically-fixable issues — combined with a
+cost-effective harness/model/effort selection — would let the smoke test
+exercise a real harness through the full verify and review loops, not
+just the mechanical Activities around them. "Predefined issues" matters
+for reproducibility: an open-ended real task has no guaranteed
+convergence behavior to assert against, but a known, deliberately
+broken-in-a-specific-way fixture does (e.g. a test that fails until a
+specific one-line fix lands — the harness either finds it or it doesn't,
+deterministically enough to assert on).
+
+**Trade-off, accepted in advance**: this makes live harness/API access
+*and* a maintained fixture repo a hard dependency for the full smoke
+test — the same category of trade-off already accepted for
+`pr.create_and_link`'s `SMOKETEST_REPO_CLONE_URL` requirement, extended
+to cover the harness loops too. Explicitly deferred — not needed until
+there's a concrete reason to test the inner loops end to end rather than
+per-Activity (as today's unit tests + live-verified adapters already do —
+see `internal/activities/harness`).
+
 ### Work
 
 The Task backlog / intake.
