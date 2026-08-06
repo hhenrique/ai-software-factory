@@ -12,12 +12,18 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/worker"
 
+	"factory/internal/activities/stub"
 	"factory/internal/backlog"
+	"factory/internal/conductor"
 	"factory/internal/eventlog"
+	"factory/internal/inbox"
 	"factory/internal/repositories"
 	"factory/internal/temporalconn"
+	"factory/internal/workflowdef"
 )
 
 func requirePool(t *testing.T) *pgxpool.Pool {
@@ -511,6 +517,143 @@ func TestCreateTaskHandlerRequiresRepoName(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/tasks", strings.NewReader(`{"description":"x"}`))
 	rec := httptest.NewRecorder()
 	createTaskHandler(d)(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// startInboxTestWorker mirrors internal/inbox's own test helper (can't
+// import unexported test helpers across packages) — a real worker on its
+// own task queue, stub Activities only, so the Inbox HTTP handlers can be
+// proven against a real signal round trip without cmd/worker or any real
+// harness cost.
+func startInboxTestWorker(t *testing.T, c client.Client, pool *pgxpool.Pool, taskQueue string) {
+	t.Helper()
+	w := worker.New(c, taskQueue, worker.Options{})
+	w.RegisterWorkflow(conductor.RunWorkflow)
+
+	eventActivities := &eventlog.Activities{Pool: pool}
+	for name, fn := range eventActivities.Registrations() {
+		w.RegisterActivityWithOptions(fn, activity.RegisterOptions{Name: name, DisableAlreadyRegisteredCheck: true})
+	}
+	for name, fn := range stub.Registrations {
+		w.RegisterActivityWithOptions(fn, activity.RegisterOptions{Name: name, DisableAlreadyRegisteredCheck: true})
+	}
+	if err := w.Start(); err != nil {
+		t.Fatalf("start test worker: %v", err)
+	}
+	t.Cleanup(w.Stop)
+}
+
+func waitForInboxEntry(t *testing.T, d *deps, runID string) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		pending, err := inbox.List(context.Background(), d.pool)
+		if err != nil {
+			t.Fatalf("inbox.List: %v", err)
+		}
+		for _, p := range pending {
+			if p.RunID == runID {
+				return
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("run %q never reached REVIEW_PENDING within the deadline", runID)
+}
+
+func TestInboxHandlersListAndCancelRoundTrip(t *testing.T) {
+	pool := requirePool(t)
+	temporal := requireTemporal(t)
+	taskQueue := "cp-inbox-test-" + time.Now().Format("20060102T150405.000000000")
+	startInboxTestWorker(t, temporal, pool, taskQueue)
+	d := &deps{pool: pool, temporal: temporal}
+
+	runID := "cp-inbox-cancel-" + time.Now().Format("20060102T150405.000000000")
+	def := workflowdef.Definition{
+		Workflow: "cp-inbox-test", Version: 1,
+		Steps: []workflowdef.Step{
+			{ID: "verify", Type: workflowdef.StepTypeTool, Action: "run.tests_lint_build",
+				On: map[string]workflowdef.Target{"pass": {StepOrState: "COMPLETED"}, "fail": {StepOrState: "REVIEW_PENDING"}}},
+		},
+	}
+	run, err := temporal.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{ID: runID, TaskQueue: taskQueue},
+		conductor.RunWorkflow, conductor.RunInput{Definition: def, FailVerifyUntilAttempt: 1})
+	if err != nil {
+		t.Fatalf("ExecuteWorkflow: %v", err)
+	}
+	waitForInboxEntry(t, d, runID)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/inbox", nil)
+	rec := httptest.NewRecorder()
+	listInboxHandler(d)(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: status = %d", rec.Code)
+	}
+	var pending []inbox.PendingRun
+	if err := json.Unmarshal(rec.Body.Bytes(), &pending); err != nil {
+		t.Fatalf("list: decode: %v", err)
+	}
+	found := false
+	for _, p := range pending {
+		if p.RunID == runID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("list did not include %q: %+v", runID, pending)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/inbox/cancel", strings.NewReader(`{"run_id":"`+runID+`"}`))
+	rec = httptest.NewRecorder()
+	cancelInboxHandler(d)(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("cancel: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var result conductor.RunResult
+	if err := run.Get(ctx, &result); err != nil {
+		t.Fatalf("workflow execution error: %v", err)
+	}
+	if result.FinalState != "CANCELLED" {
+		t.Errorf("FinalState = %q, want CANCELLED", result.FinalState)
+	}
+}
+
+func TestResumeInboxHandlerRequiresRunID(t *testing.T) {
+	temporal := requireTemporal(t)
+	d := &deps{temporal: temporal}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/inbox/resume", strings.NewReader(`{"resume_step_id":"verify"}`))
+	rec := httptest.NewRecorder()
+	resumeInboxHandler(d)(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestResumeInboxHandlerMissingResumeStepIDReturns400(t *testing.T) {
+	temporal := requireTemporal(t)
+	d := &deps{temporal: temporal}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/inbox/resume", strings.NewReader(`{"run_id":"does-not-exist"}`))
+	rec := httptest.NewRecorder()
+	resumeInboxHandler(d)(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestCancelInboxHandlerRequiresRunID(t *testing.T) {
+	pool := requirePool(t)
+	d := &deps{pool: pool}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/inbox/cancel", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+	cancelInboxHandler(d)(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}

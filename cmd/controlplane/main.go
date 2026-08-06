@@ -30,6 +30,7 @@ import (
 	"factory/internal/conductor"
 	"factory/internal/eventlog"
 	"factory/internal/harnesslimits"
+	"factory/internal/inbox"
 	"factory/internal/repositories"
 	"factory/internal/taskintake"
 	"factory/internal/temporalconn"
@@ -103,6 +104,9 @@ func main() {
 	mux.HandleFunc("GET /api/workers", listWorkersHandler(d.workflowsDir))
 	mux.HandleFunc("GET /api/tasks", listTasksHandler(d))
 	mux.HandleFunc("POST /api/tasks", createTaskHandler(d))
+	mux.HandleFunc("GET /api/inbox", listInboxHandler(d))
+	mux.HandleFunc("POST /api/inbox/resume", resumeInboxHandler(d))
+	mux.HandleFunc("POST /api/inbox/cancel", cancelInboxHandler(d))
 
 	log.Printf("controlplane: listening on %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
@@ -124,9 +128,13 @@ func envOr(key, fallback string) string {
 // "Default workflow" combobox (the .Path field), which is why this
 // existed before the rest of the section did.
 type WorkflowInfo struct {
-	Path       string     `json:"path"`
-	Workflow   string     `json:"workflow"`
-	Version    int        `json:"version"`
+	Path     string `json:"path"`
+	Workflow string `json:"workflow"`
+	Version  int    `json:"version"`
+	// StepIDs backs the Inbox view's resume-step combobox — the set of
+	// values conductor.HumanDecision.ResumeStepID actually means something
+	// for, given this Workflow.
+	StepIDs    []string   `json:"step_ids,omitempty"`
 	StepCount  int        `json:"step_count"`
 	Roles      []RoleInfo `json:"roles"`
 	HasTrigger bool       `json:"has_trigger"`
@@ -219,6 +227,9 @@ func loadWorkflowInfo(path string) WorkflowInfo {
 	info.Version = def.Version
 	info.StepCount = len(def.Steps)
 	info.HasTrigger = def.Trigger != nil
+	for _, step := range def.Steps {
+		info.StepIDs = append(info.StepIDs, step.ID)
+	}
 	for name, role := range def.Roles {
 		info.Roles = append(info.Roles, RoleInfo{Name: name, Harness: role.Harness, Model: role.Model, Params: role.Params})
 	}
@@ -420,6 +431,71 @@ func createTaskHandler(d *deps) http.HandlerFunc {
 			resp.AttachRunWarning = result.AttachRunWarning.Error()
 		}
 		writeJSON(w, http.StatusCreated, resp)
+	}
+}
+
+// listInboxHandler backs the Inbox view — every Run currently parked at
+// REVIEW_PENDING, per internal/inbox.List's doc comment on what "narrow"
+// means here (not a general Runs browser).
+func listInboxHandler(d *deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pending, err := inbox.List(r.Context(), d.pool)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, pending)
+	}
+}
+
+// resumeInboxRequest mirrors conductor.HumanDecision's resume fields —
+// RunID is Temporal's workflow id (== Run id, doc 05), not a backlog
+// Task id.
+type resumeInboxRequest struct {
+	RunID        string `json:"run_id"`
+	ResumeStepID string `json:"resume_step_id"`
+	Hint         string `json:"hint"`
+}
+
+func resumeInboxHandler(d *deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req resumeInboxRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "malformed JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.RunID == "" {
+			http.Error(w, "run_id is required", http.StatusBadRequest)
+			return
+		}
+		if err := inbox.SignalResume(r.Context(), d.temporal, req.RunID, req.ResumeStepID, req.Hint); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+type cancelInboxRequest struct {
+	RunID string `json:"run_id"`
+}
+
+func cancelInboxHandler(d *deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req cancelInboxRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "malformed JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.RunID == "" {
+			http.Error(w, "run_id is required", http.StatusBadRequest)
+			return
+		}
+		if err := inbox.SignalCancel(r.Context(), d.temporal, req.RunID); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

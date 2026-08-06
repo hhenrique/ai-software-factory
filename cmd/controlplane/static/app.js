@@ -10,6 +10,7 @@ const VIEWS = {
   workflows: { label: "Workflows", render: renderWorkflows },
   workers: { label: "Workers", render: renderWorkers },
   work: { label: "Work", render: renderWork },
+  inbox: { label: "Inbox", render: renderInbox },
 };
 
 const DEFAULT_VIEW = "repositories";
@@ -785,6 +786,235 @@ function renderWork(container) {
       submit.disabled = false;
     }
   });
+
+  refresh();
+}
+
+// ---- inbox view ----
+
+function humanizeAge(isoTimestamp) {
+  const ms = Date.now() - new Date(isoTimestamp).getTime();
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return minutes + "m ago";
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours + "h ago";
+  return Math.floor(hours / 24) + "d ago";
+}
+
+function renderInbox(container) {
+  const wrap = document.createElement("div");
+
+  const errorBanner = document.createElement("div");
+  errorBanner.className = "error-banner";
+  errorBanner.style.display = "none";
+  wrap.appendChild(errorBanner);
+
+  function showError(err) {
+    errorBanner.textContent = String(err.message || err);
+    errorBanner.style.display = "block";
+  }
+  function clearError() {
+    errorBanner.style.display = "none";
+  }
+
+  const listCard = document.createElement("div");
+  listCard.className = "card";
+  const header = document.createElement("div");
+  header.className = "card-header";
+  header.innerHTML = `<h2 id="inbox-count">Pending review</h2>`;
+  listCard.appendChild(header);
+  const list = document.createElement("div");
+  list.className = "list";
+  listCard.appendChild(list);
+  wrap.appendChild(listCard);
+
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = "Runs currently parked at REVIEW_PENDING, oldest first. This is not a general Run browser — " +
+    "see the Temporal UI for full trace/replay.";
+  wrap.appendChild(hint);
+
+  container.appendChild(wrap);
+
+  // Step-id options for the resume combobox come from /api/workflows,
+  // keyed by workflow name (the same name run_events/PendingRun.workflow
+  // carries) — one fetch, reused per row.
+  let stepIDsByWorkflow = {};
+  const workflowsReady = apiRequest("/api/workflows")
+    .then((infos) => {
+      for (const info of infos || []) {
+        stepIDsByWorkflow[info.workflow] = info.step_ids || [];
+      }
+    })
+    .catch(showError);
+
+  async function refresh() {
+    clearError();
+    let pending;
+    try {
+      pending = await apiRequest("/api/inbox");
+    } catch (err) {
+      showError(err);
+      return;
+    }
+    renderList(pending || []);
+  }
+
+  function renderList(pending) {
+    document.getElementById("inbox-count").textContent = `Pending review — ${pending.length}`;
+
+    list.innerHTML = "";
+    if (pending.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      empty.textContent = "Nothing waiting on a human right now.";
+      list.appendChild(empty);
+      return;
+    }
+
+    for (const item of pending) {
+      list.appendChild(buildInboxRow(item));
+    }
+  }
+
+  function buildInboxRow(item) {
+    const row = document.createElement("div");
+    row.className = "list-row";
+
+    const main = document.createElement("div");
+    main.className = "list-row-main";
+    const name = document.createElement("div");
+    name.className = "list-row-name";
+    name.textContent = item.run_id;
+    main.appendChild(name);
+    const meta = document.createElement("div");
+    meta.className = "list-row-meta";
+    const bits = [item.workflow, "escalated from " + item.from_step];
+    if (item.attempt_number) bits.push("attempt " + item.attempt_number);
+    bits.push(humanizeAge(item.occurred_at));
+    meta.textContent = bits.join("  ·  ");
+    main.appendChild(meta);
+    row.appendChild(main);
+
+    const actions = document.createElement("div");
+    actions.className = "list-row-actions";
+
+    const resumeBtn = document.createElement("button");
+    resumeBtn.className = "link";
+    resumeBtn.textContent = "Resume";
+    resumeBtn.addEventListener("click", () => {
+      row.replaceWith(buildResumeRow(item));
+    });
+    actions.appendChild(resumeBtn);
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "link";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.addEventListener("click", async () => {
+      if (!confirm(`Cancel run ${item.run_id}? This can't be undone.`)) return;
+      clearError();
+      cancelBtn.disabled = true;
+      try {
+        await apiRequest("/api/inbox/cancel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ run_id: item.run_id }),
+        });
+        await refresh();
+      } catch (err) {
+        showError(err);
+        cancelBtn.disabled = false;
+      }
+    });
+    actions.appendChild(cancelBtn);
+
+    row.appendChild(actions);
+    return row;
+  }
+
+  function buildResumeRow(item) {
+    const row = document.createElement("div");
+    row.className = "list-row list-row-editing";
+
+    const main = document.createElement("div");
+    main.className = "list-row-main";
+    const name = document.createElement("div");
+    name.className = "list-row-name";
+    name.textContent = item.run_id;
+    main.appendChild(name);
+
+    const form = document.createElement("div");
+    form.className = "field-stack";
+    form.innerHTML = `
+      <div class="field">
+        <label>Resume at step</label>
+        <select class="resume-step"><option value="">(loading...)</option></select>
+      </div>
+      <div class="field">
+        <label>Hint (free text, passed to the resumed step's context)</label>
+        <input type="text" class="resume-hint" placeholder="e.g. what changed, or why to proceed">
+      </div>
+    `;
+    main.appendChild(form);
+    row.appendChild(main);
+
+    const stepSelect = form.querySelector(".resume-step");
+    const hintInput = form.querySelector(".resume-hint");
+    workflowsReady.then(() => {
+      const stepIDs = stepIDsByWorkflow[item.workflow] || [];
+      stepSelect.innerHTML = "";
+      for (const id of stepIDs) {
+        const opt = document.createElement("option");
+        opt.value = id;
+        opt.textContent = id;
+        stepSelect.appendChild(opt);
+      }
+      if (stepIDs.includes(item.from_step)) stepSelect.value = item.from_step;
+    });
+
+    const actions = document.createElement("div");
+    actions.className = "list-row-actions";
+
+    const confirmBtn = document.createElement("button");
+    confirmBtn.className = "primary";
+    confirmBtn.textContent = "Confirm resume";
+    confirmBtn.addEventListener("click", async () => {
+      clearError();
+      if (!stepSelect.value) {
+        showError(new Error("Choose a step to resume at."));
+        return;
+      }
+      confirmBtn.disabled = true;
+      try {
+        await apiRequest("/api/inbox/resume", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            run_id: item.run_id,
+            resume_step_id: stepSelect.value,
+            hint: hintInput.value.trim(),
+          }),
+        });
+        await refresh();
+      } catch (err) {
+        showError(err);
+        confirmBtn.disabled = false;
+      }
+    });
+    actions.appendChild(confirmBtn);
+
+    const cancelEditBtn = document.createElement("button");
+    cancelEditBtn.className = "link";
+    cancelEditBtn.textContent = "Dismiss";
+    cancelEditBtn.addEventListener("click", () => {
+      row.replaceWith(buildInboxRow(item));
+    });
+    actions.appendChild(cancelEditBtn);
+
+    row.appendChild(actions);
+    return row;
+  }
 
   refresh();
 }
