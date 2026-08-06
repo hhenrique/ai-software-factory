@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -157,6 +158,56 @@ func TestCreateListEnableDisableRepositoryHandlers(t *testing.T) {
 	setEnabledHandler(pool, true)(rec, req)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("enable: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	updateBody := `{"name":"` + identity + `","test_command":"go test ./...","default_workflow":"workflows/other.yaml"}`
+	req = httptest.NewRequest(http.MethodPost, "/api/repositories/update", strings.NewReader(updateBody))
+	rec = httptest.NewRecorder()
+	updateRepositoryHandler(pool)(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var updated repositories.Repository
+	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("update: decode response: %v", err)
+	}
+	if updated.TestCommand != "go test ./..." || updated.DefaultWorkflow != "workflows/other.yaml" {
+		t.Fatalf("update: unexpected response %+v", updated)
+	}
+	if updated.CloneURL != created.CloneURL {
+		t.Fatalf("update: clone_url changed: got %q, want %q", updated.CloneURL, created.CloneURL)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/repositories/delete", strings.NewReader(disableBody))
+	rec = httptest.NewRecorder()
+	deleteRepositoryHandler(pool)(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if _, err := repositories.Get(context.Background(), pool, identity); !errors.Is(err, repositories.ErrNotFound) {
+		t.Fatalf("Get after delete: err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestUpdateRepositoryHandlerUnknownNameReturns404(t *testing.T) {
+	pool := requirePool(t)
+	body := `{"name":"does-not-exist-` + time.Now().Format(time.RFC3339Nano) + `","test_command":"x","default_workflow":"y"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/repositories/update", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	updateRepositoryHandler(pool)(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestDeleteRepositoryHandlerUnknownNameReturns404(t *testing.T) {
+	pool := requirePool(t)
+	body := `{"name":"does-not-exist-` + time.Now().Format(time.RFC3339Nano) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/repositories/delete", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	deleteRepositoryHandler(pool)(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
 

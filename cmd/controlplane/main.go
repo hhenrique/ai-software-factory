@@ -52,6 +52,8 @@ func main() {
 	mux.HandleFunc("POST /api/repositories", createRepositoryHandler(pool))
 	mux.HandleFunc("POST /api/repositories/enable", setEnabledHandler(pool, true))
 	mux.HandleFunc("POST /api/repositories/disable", setEnabledHandler(pool, false))
+	mux.HandleFunc("POST /api/repositories/update", updateRepositoryHandler(pool))
+	mux.HandleFunc("POST /api/repositories/delete", deleteRepositoryHandler(pool))
 	mux.HandleFunc("GET /api/workflows", listWorkflowsHandler(envOr("CONTROLPLANE_WORKFLOWS_DIR", "workflows")))
 
 	log.Printf("controlplane: listening on %s", addr)
@@ -150,21 +152,70 @@ func createRepositoryHandler(pool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
-// setEnabledRequest is the body for /api/repositories/{enable,disable} —
-// name only, not a path segment, since a canonical identity contains
-// slashes ("github.com/owner/repo").
-type setEnabledRequest struct {
+// nameRequest is the body for every /api/repositories/{action} endpoint
+// keyed by name only — not a path segment, since a canonical identity
+// contains slashes ("github.com/owner/repo").
+type nameRequest struct {
 	Name string `json:"name"`
 }
 
 func setEnabledHandler(pool *pgxpool.Pool, enabled bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req setEnabledRequest
+		var req nameRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "malformed JSON body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		err := repositories.SetEnabled(r.Context(), pool, req.Name, enabled)
+		if errors.Is(err, repositories.ErrNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// updateRepositoryRequest is /api/repositories/update's body — name plus
+// exactly the fields repositories.Update allows changing (not clone_url:
+// see that function's doc comment for why a rename is a delete+re-add).
+type updateRepositoryRequest struct {
+	Name            string `json:"name"`
+	TestCommand     string `json:"test_command"`
+	DefaultWorkflow string `json:"default_workflow"`
+}
+
+func updateRepositoryHandler(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req updateRepositoryRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "malformed JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		repo, err := repositories.Update(r.Context(), pool, req.Name, req.TestCommand, req.DefaultWorkflow)
+		if errors.Is(err, repositories.ErrNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, repo)
+	}
+}
+
+func deleteRepositoryHandler(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req nameRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "malformed JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		err := repositories.Delete(r.Context(), pool, req.Name)
 		if errors.Is(err, repositories.ErrNotFound) {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return

@@ -115,17 +115,31 @@ function renderRepositories(container) {
   `;
   wrap.appendChild(formCard);
 
-  apiRequest("/api/workflows")
+  // Fetched once, reused both by the add-form's select and by every
+  // row's edit-mode select (populateWorkflowSelect below) — one round
+  // trip regardless of how many rows get edited.
+  let workflowFiles = [];
+  const workflowFilesReady = apiRequest("/api/workflows")
     .then((files) => {
-      const select = document.getElementById("rf-workflow");
-      for (const path of files || []) {
-        const option = document.createElement("option");
-        option.value = path;
-        option.textContent = path;
-        select.appendChild(option);
-      }
+      workflowFiles = files || [];
+      populateWorkflowSelect(document.getElementById("rf-workflow"), workflowFiles, "");
     })
     .catch(showError);
+
+  function populateWorkflowSelect(select, files, selected) {
+    select.innerHTML = "";
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "(none)";
+    select.appendChild(none);
+    for (const path of files) {
+      const option = document.createElement("option");
+      option.value = path;
+      option.textContent = path;
+      select.appendChild(option);
+    }
+    select.value = selected || "";
+  }
 
   const listCard = document.createElement("div");
   listCard.className = "card";
@@ -167,53 +181,156 @@ function renderRepositories(container) {
     }
 
     for (const repo of repos) {
-      const row = document.createElement("div");
-      row.className = "list-row";
-
-      const main = document.createElement("div");
-      main.className = "list-row-main";
-      const name = document.createElement("div");
-      name.className = "list-row-name";
-      name.textContent = repo.name;
-      main.appendChild(name);
-      const meta = document.createElement("div");
-      meta.className = "list-row-meta";
-      meta.textContent = (repo.default_workflow || "no default workflow") +
-        (repo.test_command ? "  ·  " + repo.test_command : "");
-      main.appendChild(meta);
-      row.appendChild(main);
-
-      const actions = document.createElement("div");
-      actions.className = "list-row-actions";
-
-      const badge = document.createElement("span");
-      badge.className = "badge " + (repo.enabled ? "enabled" : "disabled");
-      badge.textContent = repo.enabled ? "Enabled" : "Disabled";
-      actions.appendChild(badge);
-
-      const toggle = document.createElement("button");
-      toggle.className = "link";
-      toggle.textContent = repo.enabled ? "Disable" : "Enable";
-      toggle.addEventListener("click", async () => {
-        clearError();
-        toggle.disabled = true;
-        try {
-          await apiRequest("/api/repositories/" + (repo.enabled ? "disable" : "enable"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name: repo.name }),
-          });
-          await refresh();
-        } catch (err) {
-          showError(err);
-          toggle.disabled = false;
-        }
-      });
-      actions.appendChild(toggle);
-
-      row.appendChild(actions);
-      list.appendChild(row);
+      list.appendChild(buildViewRow(repo));
     }
+  }
+
+  function buildViewRow(repo) {
+    const row = document.createElement("div");
+    row.className = "list-row";
+
+    const main = document.createElement("div");
+    main.className = "list-row-main";
+    const name = document.createElement("div");
+    name.className = "list-row-name";
+    name.textContent = repo.name;
+    main.appendChild(name);
+    const meta = document.createElement("div");
+    meta.className = "list-row-meta";
+    meta.textContent = (repo.default_workflow || "no default workflow") +
+      (repo.test_command ? "  ·  " + repo.test_command : "");
+    main.appendChild(meta);
+    row.appendChild(main);
+
+    const actions = document.createElement("div");
+    actions.className = "list-row-actions";
+
+    const editBtn = document.createElement("button");
+    editBtn.className = "link";
+    editBtn.textContent = "Edit";
+    editBtn.addEventListener("click", () => {
+      row.replaceWith(buildEditRow(repo));
+    });
+    actions.appendChild(editBtn);
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "link";
+    deleteBtn.textContent = "Delete";
+    deleteBtn.addEventListener("click", async () => {
+      if (!confirm(`Delete ${repo.name}? This can't be undone.`)) return;
+      clearError();
+      deleteBtn.disabled = true;
+      try {
+        await apiRequest("/api/repositories/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: repo.name }),
+        });
+        await refresh();
+      } catch (err) {
+        showError(err);
+        deleteBtn.disabled = false;
+      }
+    });
+    actions.appendChild(deleteBtn);
+
+    const badge = document.createElement("span");
+    badge.className = "badge " + (repo.enabled ? "enabled" : "disabled");
+    badge.textContent = repo.enabled ? "Enabled" : "Disabled";
+    actions.appendChild(badge);
+
+    const toggle = document.createElement("button");
+    toggle.className = "link";
+    toggle.textContent = repo.enabled ? "Disable" : "Enable";
+    toggle.addEventListener("click", async () => {
+      clearError();
+      toggle.disabled = true;
+      try {
+        await apiRequest("/api/repositories/" + (repo.enabled ? "disable" : "enable"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: repo.name }),
+        });
+        await refresh();
+      } catch (err) {
+        showError(err);
+        toggle.disabled = false;
+      }
+    });
+    actions.appendChild(toggle);
+
+    row.appendChild(actions);
+    return row;
+  }
+
+  function buildEditRow(repo) {
+    const row = document.createElement("div");
+    row.className = "list-row list-row-editing";
+
+    const main = document.createElement("div");
+    main.className = "list-row-main";
+    const name = document.createElement("div");
+    name.className = "list-row-name";
+    name.textContent = repo.name;
+    main.appendChild(name);
+
+    const editForm = document.createElement("div");
+    editForm.className = "field-stack";
+    editForm.innerHTML = `
+      <div class="field">
+        <label>Test command</label>
+        <input type="text" class="edit-test-command">
+      </div>
+      <div class="field">
+        <label>Default workflow</label>
+        <select class="edit-workflow"></select>
+      </div>
+    `;
+    main.appendChild(editForm);
+    row.appendChild(main);
+
+    const testCommandInput = editForm.querySelector(".edit-test-command");
+    testCommandInput.value = repo.test_command || "";
+    const workflowSelect = editForm.querySelector(".edit-workflow");
+    workflowFilesReady.then(() => populateWorkflowSelect(workflowSelect, workflowFiles, repo.default_workflow));
+
+    const actions = document.createElement("div");
+    actions.className = "list-row-actions";
+
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "primary";
+    saveBtn.textContent = "Save";
+    saveBtn.addEventListener("click", async () => {
+      clearError();
+      saveBtn.disabled = true;
+      try {
+        await apiRequest("/api/repositories/update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: repo.name,
+            test_command: testCommandInput.value.trim(),
+            default_workflow: workflowSelect.value,
+          }),
+        });
+        await refresh();
+      } catch (err) {
+        showError(err);
+        saveBtn.disabled = false;
+      }
+    });
+    actions.appendChild(saveBtn);
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "link";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.addEventListener("click", () => {
+      row.replaceWith(buildViewRow(repo));
+    });
+    actions.appendChild(cancelBtn);
+
+    row.appendChild(actions);
+    return row;
   }
 
   document.getElementById("rf-submit").addEventListener("click", async () => {

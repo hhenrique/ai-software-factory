@@ -112,3 +112,42 @@ func SetEnabled(ctx context.Context, pool *pgxpool.Pool, name string, enabled bo
 	}
 	return nil
 }
+
+// Update changes a repository's test command and default workflow —
+// deliberately not name or clone_url: the name is the canonical identity
+// rows are keyed on (cmd/submittask's -repo, the primary key here), and
+// changing it is really registering a different repository, not editing
+// this one. Use Delete + Insert for that. ErrNotFound if name isn't
+// registered.
+func Update(ctx context.Context, pool *pgxpool.Pool, name, testCommand, defaultWorkflow string) (Repository, error) {
+	var r Repository
+	err := pool.QueryRow(ctx, `
+		UPDATE repositories SET test_command = $1, default_workflow = $2, updated_at = now()
+		WHERE name = $3
+		RETURNING name, clone_url, test_command, default_workflow, enabled, created_at, updated_at
+	`, testCommand, defaultWorkflow, name).Scan(
+		&r.Name, &r.CloneURL, &r.TestCommand, &r.DefaultWorkflow, &r.Enabled, &r.CreatedAt, &r.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Repository{}, ErrNotFound
+	}
+	if err != nil {
+		return Repository{}, fmt.Errorf("repositories: update %q: %w", name, err)
+	}
+	return r, nil
+}
+
+// Delete removes a repository. ErrNotFound if name isn't registered.
+// There's no soft-delete/archive here — Disable already covers "stop
+// using this repo but keep the record," so a real Delete is for
+// registrations that were mistakes (wrong name, test repo), not the
+// normal decommission path.
+func Delete(ctx context.Context, pool *pgxpool.Pool, name string) error {
+	tag, err := pool.Exec(ctx, `DELETE FROM repositories WHERE name = $1`, name)
+	if err != nil {
+		return fmt.Errorf("repositories: delete %q: %w", name, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

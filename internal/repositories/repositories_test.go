@@ -130,3 +130,60 @@ func TestListIncludesInsertedRepository(t *testing.T) {
 		t.Errorf("List did not include inserted repository %q", name)
 	}
 }
+
+func TestUpdateChangesTestCommandAndWorkflowNotNameOrCloneURL(t *testing.T) {
+	pool := requirePool(t)
+	ctx := context.Background()
+	name := uniqueName(t)
+
+	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "old command", "old.yaml"); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	updated, err := Update(ctx, pool, name, "new command", "new.yaml")
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if updated.TestCommand != "new command" || updated.DefaultWorkflow != "new.yaml" {
+		t.Errorf("Update = %+v, want new command/new.yaml", updated)
+	}
+	if updated.Name != name || updated.CloneURL != "https://github.com/a/b.git" {
+		t.Errorf("Update changed name/clone_url: %+v", updated)
+	}
+}
+
+func TestUpdateUnknownNameReturnsErrNotFound(t *testing.T) {
+	pool := requirePool(t)
+	ctx := context.Background()
+
+	_, err := Update(ctx, pool, "does-not-exist-"+time.Now().Format(time.RFC3339Nano), "cmd", "wf.yaml")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Update: err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestDeleteThenGetReturnsErrNotFound(t *testing.T) {
+	pool := requirePool(t)
+	ctx := context.Background()
+	name := uniqueName(t)
+
+	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "", ""); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if err := Delete(ctx, pool, name); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := Get(ctx, pool, name); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get after Delete: err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestDeleteUnknownNameReturnsErrNotFound(t *testing.T) {
+	pool := requirePool(t)
+	ctx := context.Background()
+
+	err := Delete(ctx, pool, "does-not-exist-"+time.Now().Format(time.RFC3339Nano))
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Delete: err = %v, want ErrNotFound", err)
+	}
+}

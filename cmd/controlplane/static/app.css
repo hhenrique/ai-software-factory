@@ -293,6 +293,20 @@ button.link:hover {
   border-top: none;
 }
 
+.list-row-editing {
+  align-items: flex-start;
+}
+
+.list-row-editing .list-row-main {
+  flex: 1;
+  gap: var(--space-3);
+}
+
+.list-row-editing .field-stack {
+  gap: var(--space-2);
+  max-width: 480px;
+}
+
 .list-row-main {
   display: flex;
   flex-direction: column;
