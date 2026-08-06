@@ -12,9 +12,12 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.temporal.io/sdk/client"
 
+	"factory/internal/backlog"
 	"factory/internal/eventlog"
 	"factory/internal/repositories"
+	"factory/internal/temporalconn"
 )
 
 func requirePool(t *testing.T) *pgxpool.Pool {
@@ -32,6 +35,23 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 	return pool
+}
+
+// requireTemporal dials a real local Temporal, skipping if unreachable —
+// tests that use this never need cmd/worker running: ExecuteWorkflow just
+// durably registers the Run with Temporal, and nothing actually executes
+// (no real harness call, no cost) until a worker polls the task queue.
+func requireTemporal(t *testing.T) client.Client {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	c, err := temporalconn.DialWithRetry(ctx, "localhost:7233", "default", 3, 500*time.Millisecond)
+	if err != nil {
+		t.Skip("Temporal not reachable (is `docker compose up` running?):", err)
+	}
+	t.Cleanup(c.Close)
+	return c
 }
 
 func TestParseGitHubIdentity(t *testing.T) {
@@ -385,6 +405,112 @@ func TestCreateRepositoryHandlerMalformedBody(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/repositories", strings.NewReader("not json"))
 	rec := httptest.NewRecorder()
 	createRepositoryHandler(pool)(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestCreateAndListTaskHandlers(t *testing.T) {
+	pool := requirePool(t)
+	temporal := requireTemporal(t)
+	d := &deps{
+		pool:          pool,
+		temporal:      temporal,
+		taskQueue:     "factory-conductor",
+		harnessLimits: nil,
+		workflowsDir:  "../../workflows",
+	}
+
+	repoName := "github.com/hhenrique/cp-task-test-" + time.Now().Format("20060102T150405.000000000")
+	if _, err := repositories.Insert(context.Background(), pool, repoName,
+		"https://github.com/hhenrique/toy-repo.git", "true", "../../workflows/issue-to-pr-claude-only.yaml"); err != nil {
+		t.Fatalf("repositories.Insert: %v", err)
+	}
+
+	body := `{"repo_name":"` + repoName + `","description":"a task created from the control plane"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	createTaskHandler(d)(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var created createTaskResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("create: decode response: %v", err)
+	}
+	if created.TaskID == "" || created.RunID == "" || created.Workflow != "issue-to-pr-claude-only" {
+		t.Fatalf("create: unexpected response %+v", created)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+	rec = httptest.NewRecorder()
+	listTasksHandler(d)(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: status = %d", rec.Code)
+	}
+	var listed []backlog.Task
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("list: decode response: %v", err)
+	}
+	found := false
+	for _, task := range listed {
+		if task.TaskID == created.TaskID {
+			found = true
+			if task.RunID != created.RunID {
+				t.Errorf("listed task RunID = %q, want %q", task.RunID, created.RunID)
+			}
+			if task.Source != "human" {
+				t.Errorf("listed task Source = %q, want human", task.Source)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("list: did not include created task %q", created.TaskID)
+	}
+}
+
+func TestCreateTaskHandlerUnknownRepoReturns404(t *testing.T) {
+	pool := requirePool(t)
+	d := &deps{pool: pool, workflowsDir: "../../workflows"}
+
+	body := `{"repo_name":"does-not-exist-` + time.Now().Format(time.RFC3339Nano) + `","description":"x"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	createTaskHandler(d)(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s, want 404", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateTaskHandlerDisabledRepoReturnsConflict(t *testing.T) {
+	pool := requirePool(t)
+	d := &deps{pool: pool, workflowsDir: "../../workflows"}
+
+	repoName := "github.com/hhenrique/cp-task-disabled-" + time.Now().Format("20060102T150405.000000000")
+	if _, err := repositories.Insert(context.Background(), pool, repoName,
+		"https://github.com/hhenrique/toy-repo.git", "true", ""); err != nil {
+		t.Fatalf("repositories.Insert: %v", err)
+	}
+	if err := repositories.SetEnabled(context.Background(), pool, repoName, false); err != nil {
+		t.Fatalf("SetEnabled: %v", err)
+	}
+
+	body := `{"repo_name":"` + repoName + `","description":"x"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	createTaskHandler(d)(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body = %s, want 409", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateTaskHandlerRequiresRepoName(t *testing.T) {
+	pool := requirePool(t)
+	d := &deps{pool: pool, workflowsDir: "../../workflows"}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks", strings.NewReader(`{"description":"x"}`))
+	rec := httptest.NewRecorder()
+	createTaskHandler(d)(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}

@@ -9,6 +9,7 @@ package backlog
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -76,6 +77,51 @@ func InsertHumanTask(ctx context.Context, pool *pgxpool.Pool, targetRepo, workfl
 		return "", fmt.Errorf("backlog: insert human task: %w", err)
 	}
 	return taskID, nil
+}
+
+// Task is one backlog_tasks row — docs/04's seed of the real Task entity
+// (still no priority, no assigned-Workflow-as-a-first-class-field beyond
+// the plain string here, no triage UI beyond this read). RunID/TargetRepo/
+// Workflow/Description are "" rather than a Go nil/pointer for NULL: every
+// consumer so far (cmd/controlplane's JSON API) wants a plain string, and
+// NULL only ever means "not set yet," not a meaningful third state to
+// distinguish from empty.
+type Task struct {
+	TaskID      string    `json:"task_id"`
+	RunID       string    `json:"run_id,omitempty"`
+	TargetRepo  string    `json:"target_repo,omitempty"`
+	Workflow    string    `json:"workflow,omitempty"`
+	Source      string    `json:"source"`
+	Description string    `json:"description,omitempty"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// List returns every backlog Task, most recently created first — backs
+// cmd/controlplane's Work section.
+func List(ctx context.Context, pool *pgxpool.Pool) ([]Task, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT task_id, coalesce(run_id, ''), coalesce(target_repo, ''), coalesce(workflow, ''),
+		       source, coalesce(description, ''), status, created_at
+		FROM backlog_tasks ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("backlog: list: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Task
+	for rows.Next() {
+		var t Task
+		if err := rows.Scan(&t.TaskID, &t.RunID, &t.TargetRepo, &t.Workflow, &t.Source, &t.Description, &t.Status, &t.CreatedAt); err != nil {
+			return nil, fmt.Errorf("backlog: list: scan: %w", err)
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("backlog: list: %w", err)
+	}
+	return out, nil
 }
 
 // AttachRun records which Run id was started for a Task and moves its

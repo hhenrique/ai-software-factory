@@ -9,6 +9,7 @@ const VIEWS = {
   repositories: { label: "Repositories", render: renderRepositories },
   workflows: { label: "Workflows", render: renderWorkflows },
   workers: { label: "Workers", render: renderWorkers },
+  work: { label: "Work", render: renderWork },
 };
 
 const DEFAULT_VIEW = "repositories";
@@ -72,6 +73,24 @@ async function apiRequest(path, opts) {
   return res.json();
 }
 
+// populateWorkflowSelect fills a <select> from /api/workflows'
+// WorkflowInfo objects — shared by the Repositories view (add form +
+// per-row edit) and the Work view (task create form).
+function populateWorkflowSelect(select, infos, selected) {
+  select.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "(none)";
+  select.appendChild(none);
+  for (const info of infos) {
+    const option = document.createElement("option");
+    option.value = info.path;
+    option.textContent = info.path + (info.valid ? "" : "  (invalid)");
+    select.appendChild(option);
+  }
+  select.value = selected || "";
+}
+
 // ---- repositories view ----
 
 function renderRepositories(container) {
@@ -118,8 +137,9 @@ function renderRepositories(container) {
   wrap.appendChild(formCard);
 
   // Fetched once, reused both by the add-form's select and by every
-  // row's edit-mode select (populateWorkflowSelect below) — one round
-  // trip regardless of how many rows get edited. /api/workflows returns
+  // row's edit-mode select (populateWorkflowSelect, module-scoped below
+  // since the Work view's create form also needs it) — one round trip
+  // regardless of how many rows get edited. /api/workflows returns
   // WorkflowInfo objects (see cmd/controlplane's Workflows view), not
   // bare paths — only .path/.valid are used here.
   let workflows = [];
@@ -129,21 +149,6 @@ function renderRepositories(container) {
       populateWorkflowSelect(document.getElementById("rf-workflow"), workflows, "");
     })
     .catch(showError);
-
-  function populateWorkflowSelect(select, infos, selected) {
-    select.innerHTML = "";
-    const none = document.createElement("option");
-    none.value = "";
-    none.textContent = "(none)";
-    select.appendChild(none);
-    for (const info of infos) {
-      const option = document.createElement("option");
-      option.value = info.path;
-      option.textContent = info.path + (info.valid ? "" : "  (invalid)");
-      select.appendChild(option);
-    }
-    select.value = selected || "";
-  }
 
   const listCard = document.createElement("div");
   listCard.className = "card";
@@ -560,4 +565,226 @@ function renderWorkers(container) {
 
     return row;
   }
+}
+
+// ---- work (task) view ----
+
+function renderWork(container) {
+  const wrap = document.createElement("div");
+
+  const errorBanner = document.createElement("div");
+  errorBanner.className = "error-banner";
+  errorBanner.style.display = "none";
+  wrap.appendChild(errorBanner);
+
+  function showError(err) {
+    errorBanner.textContent = String(err.message || err);
+    errorBanner.style.display = "block";
+  }
+  function clearError() {
+    errorBanner.style.display = "none";
+  }
+
+  const formCard = document.createElement("div");
+  formCard.className = "card";
+  formCard.innerHTML = `
+    <div class="card-header">
+      <h2>Delegate a task</h2>
+    </div>
+    <div class="field-stack">
+      <div class="field">
+        <label for="tf-repo">Repository</label>
+        <select id="tf-repo"><option value="">(loading...)</option></select>
+      </div>
+      <div class="field">
+        <label for="tf-description">Description</label>
+        <input id="tf-description" type="text" placeholder="free text — what should the agent do?">
+      </div>
+      <div class="field">
+        <label for="tf-issue">... or GitHub issue number</label>
+        <input id="tf-issue" type="number" min="1" placeholder="e.g. 3 — fetches the issue's title/body instead">
+      </div>
+      <div class="field">
+        <label for="tf-workflow">Workflow</label>
+        <select id="tf-workflow"><option value="">(repository default)</option></select>
+      </div>
+      <button class="primary" id="tf-submit">Delegate task</button>
+    </div>
+    <p class="hint">Provide exactly one of Description or GitHub issue number. This starts a real Run —
+      real harness calls, real API cost — the moment you submit.</p>
+  `;
+  wrap.appendChild(formCard);
+
+  let repos = [];
+  const reposReady = apiRequest("/api/repositories")
+    .then((all) => {
+      repos = (all || []).filter((r) => r.enabled);
+      const select = document.getElementById("tf-repo");
+      select.innerHTML = "";
+      if (repos.length === 0) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "(no enabled repositories — add one under Repositories)";
+        select.appendChild(opt);
+        return;
+      }
+      for (const repo of repos) {
+        const opt = document.createElement("option");
+        opt.value = repo.name;
+        opt.textContent = repo.name;
+        select.appendChild(opt);
+      }
+    })
+    .catch(showError);
+
+  let workflows = [];
+  const workflowsReady = apiRequest("/api/workflows")
+    .then((infos) => {
+      workflows = infos || [];
+      populateWorkflowSelect(document.getElementById("tf-workflow"), workflows, "");
+    })
+    .catch(showError);
+
+  const listCard = document.createElement("div");
+  listCard.className = "card";
+  const listHeader = document.createElement("div");
+  listHeader.className = "card-header";
+  listHeader.innerHTML = `<h2 id="task-count">Tasks</h2>`;
+  listCard.appendChild(listHeader);
+  const list = document.createElement("div");
+  list.className = "list";
+  listCard.appendChild(list);
+  wrap.appendChild(listCard);
+
+  // container.appendChild(wrap) must happen before any getElementById
+  // lookup below — until wrap is attached, its contents aren't part of
+  // the live document and getElementById returns null.
+  container.appendChild(wrap);
+
+  // When the chosen repository has a default_workflow, preselect it (still
+  // overridable) so the human sees what will actually run before hitting
+  // submit, rather than discovering it after the fact.
+  document.getElementById("tf-repo").addEventListener("change", async (ev) => {
+    await reposReady;
+    await workflowsReady;
+    const repo = repos.find((r) => r.name === ev.target.value);
+    populateWorkflowSelect(document.getElementById("tf-workflow"), workflows, repo ? repo.default_workflow : "");
+  });
+
+  async function refresh() {
+    clearError();
+    let tasks;
+    try {
+      tasks = await apiRequest("/api/tasks");
+    } catch (err) {
+      showError(err);
+      return;
+    }
+    renderList(tasks || []);
+  }
+
+  function renderList(tasks) {
+    document.getElementById("task-count").textContent = `Tasks — ${tasks.length} total`;
+
+    list.innerHTML = "";
+    if (tasks.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      empty.textContent = "No tasks yet.";
+      list.appendChild(empty);
+      return;
+    }
+
+    for (const task of tasks) {
+      list.appendChild(buildTaskRow(task));
+    }
+  }
+
+  function buildTaskRow(task) {
+    const row = document.createElement("div");
+    row.className = "list-row";
+
+    const main = document.createElement("div");
+    main.className = "list-row-main";
+
+    const name = document.createElement("div");
+    name.className = "list-row-name";
+    const description = task.description || "(no description)";
+    name.textContent = description.length > 100 ? description.slice(0, 100) + "…" : description;
+    main.appendChild(name);
+
+    const meta = document.createElement("div");
+    meta.className = "list-row-meta";
+    const bits = [task.source];
+    if (task.target_repo) bits.push(task.target_repo);
+    if (task.workflow) bits.push(task.workflow);
+    if (task.run_id) bits.push("run: " + task.run_id);
+    meta.textContent = bits.join("  ·  ");
+    main.appendChild(meta);
+
+    row.appendChild(main);
+
+    const actions = document.createElement("div");
+    actions.className = "list-row-actions";
+    const badge = document.createElement("span");
+    badge.className = "badge " + (task.status === "QUEUED" ? "disabled" : "enabled");
+    badge.textContent = task.status;
+    actions.appendChild(badge);
+    row.appendChild(actions);
+
+    return row;
+  }
+
+  document.getElementById("tf-submit").addEventListener("click", async () => {
+    clearError();
+    const repoName = document.getElementById("tf-repo").value;
+    const description = document.getElementById("tf-description").value.trim();
+    const issueStr = document.getElementById("tf-issue").value.trim();
+    const workflowFile = document.getElementById("tf-workflow").value;
+
+    if (!repoName) {
+      showError(new Error("Choose a repository."));
+      return;
+    }
+    if (!description && !issueStr) {
+      showError(new Error("Provide a description or a GitHub issue number."));
+      return;
+    }
+    if (description && issueStr) {
+      showError(new Error("Provide exactly one of description or GitHub issue number, not both."));
+      return;
+    }
+
+    const repo = repos.find((r) => r.name === repoName);
+    const target = issueStr ? `issue #${issueStr}` : "a manual description";
+    if (!confirm(`This starts a real Run against ${repoName} (${target}) using ` +
+        `${workflowFile || (repo && repo.default_workflow) || "the repository's default workflow"}. ` +
+        `It will make real, billed harness calls. Continue?`)) {
+      return;
+    }
+
+    const submit = document.getElementById("tf-submit");
+    submit.disabled = true;
+    try {
+      const body = { repo_name: repoName, workflow_file: workflowFile, description: description };
+      if (issueStr) body.github_issue = parseInt(issueStr, 10);
+      const created = await apiRequest("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (created.attach_run_warning) {
+        showError(new Error("Task started (run " + created.run_id + ") but: " + created.attach_run_warning));
+      }
+      document.getElementById("tf-description").value = "";
+      document.getElementById("tf-issue").value = "";
+      await refresh();
+    } catch (err) {
+      showError(err);
+    } finally {
+      submit.disabled = false;
+    }
+  });
+
+  refresh();
 }

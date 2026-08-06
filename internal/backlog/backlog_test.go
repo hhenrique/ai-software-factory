@@ -154,3 +154,36 @@ func TestAttachRunUnknownTaskIDErrors(t *testing.T) {
 		t.Fatalf("expected an error for an unknown task_id")
 	}
 }
+
+func TestListIncludesInsertedHumanTaskWithEmptyRunIDBeforeAttach(t *testing.T) {
+	a := requirePool(t)
+	ctx := context.Background()
+
+	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr-claude-only", "list test "+time.Now().Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatalf("InsertHumanTask: %v", err)
+	}
+
+	tasks, err := List(ctx, a.Pool)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var found *Task
+	for i := range tasks {
+		if tasks[i].TaskID == taskID {
+			found = &tasks[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("List did not include inserted task %q", taskID)
+	}
+	if found.RunID != "" {
+		t.Errorf("RunID = %q, want empty before AttachRun", found.RunID)
+	}
+	if found.TargetRepo != "hhenrique/toy-repo" || found.Workflow != "issue-to-pr-claude-only" {
+		t.Errorf("unexpected fields: %+v", found)
+	}
+	if found.Status != "QUEUED" {
+		t.Errorf("Status = %q, want QUEUED", found.Status)
+	}
+}

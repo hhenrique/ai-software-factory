@@ -21,16 +21,37 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.temporal.io/sdk/client"
 
+	"factory/internal/backlog"
+	"factory/internal/conductor"
 	"factory/internal/eventlog"
+	"factory/internal/harnesslimits"
 	"factory/internal/repositories"
+	"factory/internal/taskintake"
+	"factory/internal/temporalconn"
 	"factory/internal/workflowdef"
 )
 
 //go:embed static
 var staticFS embed.FS
+
+// deps holds the dependencies shared by handlers that need more than a
+// bare Postgres pool (Work's task creation, later Inbox's signals) — a
+// real Temporal client and its own config, not just the projection store.
+// Handlers that only ever needed the pool (Repositories, Workflows,
+// Workers) keep their existing pool-only constructor signature; this
+// struct is additive, not a rewrite of those.
+type deps struct {
+	pool          *pgxpool.Pool
+	temporal      client.Client
+	taskQueue     string
+	harnessLimits map[string]int
+	workflowsDir  string
+}
 
 func main() {
 	ctx := context.Background()
@@ -39,6 +60,29 @@ func main() {
 		log.Fatalf("controlplane: %v", err)
 	}
 	defer pool.Close()
+
+	hostPort := envOr("TEMPORAL_HOST_PORT", "localhost:7233")
+	namespace := envOr("TEMPORAL_NAMESPACE", "default")
+	dialCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	temporalClient, err := temporalconn.DialWithRetry(dialCtx, hostPort, namespace, 45, 2*time.Second)
+	cancel()
+	if err != nil {
+		log.Fatalf("controlplane: unable to dial Temporal at %s: %v", hostPort, err)
+	}
+	defer temporalClient.Close()
+
+	harnessLimits, err := harnesslimits.ParseEnv()
+	if err != nil {
+		log.Fatalf("controlplane: %v", err)
+	}
+
+	d := &deps{
+		pool:          pool,
+		temporal:      temporalClient,
+		taskQueue:     envOr("TASK_QUEUE", "factory-conductor"),
+		harnessLimits: harnessLimits,
+		workflowsDir:  envOr("CONTROLPLANE_WORKFLOWS_DIR", "workflows"),
+	}
 
 	addr := envOr("CONTROLPLANE_ADDR", ":8082")
 
@@ -55,8 +99,10 @@ func main() {
 	mux.HandleFunc("POST /api/repositories/disable", setEnabledHandler(pool, false))
 	mux.HandleFunc("POST /api/repositories/update", updateRepositoryHandler(pool))
 	mux.HandleFunc("POST /api/repositories/delete", deleteRepositoryHandler(pool))
-	mux.HandleFunc("GET /api/workflows", listWorkflowsHandler(envOr("CONTROLPLANE_WORKFLOWS_DIR", "workflows")))
-	mux.HandleFunc("GET /api/workers", listWorkersHandler(envOr("CONTROLPLANE_WORKFLOWS_DIR", "workflows")))
+	mux.HandleFunc("GET /api/workflows", listWorkflowsHandler(d.workflowsDir))
+	mux.HandleFunc("GET /api/workers", listWorkersHandler(d.workflowsDir))
+	mux.HandleFunc("GET /api/tasks", listTasksHandler(d))
+	mux.HandleFunc("POST /api/tasks", createTaskHandler(d))
 
 	log.Printf("controlplane: listening on %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
@@ -272,6 +318,109 @@ func aggregateWorkers(infos []WorkflowInfo) []WorkerInfo {
 		workers[i] = *byKey[k]
 	}
 	return workers
+}
+
+// listTasksHandler backs docs/04's Work section — every backlog Task,
+// both sources (human-submitted via createTaskHandler/cmd/submittask, and
+// auto-generated:review-finding via internal/backlog.CreateTask).
+func listTasksHandler(d *deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tasks, err := backlog.List(r.Context(), d.pool)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, tasks)
+	}
+}
+
+// createTaskRequest is the Work section's "create Task" form: pick an
+// already-registered, enabled Repository by name rather than re-entering
+// a clone URL/test command (those live on the Repository, see
+// internal/repositories) — Workflow defaults to that repo's
+// default_workflow when left blank, same precedence taskintake.Submit
+// otherwise expects a caller to have already resolved.
+type createTaskRequest struct {
+	RepoName     string `json:"repo_name"`
+	WorkflowFile string `json:"workflow_file"`
+	Description  string `json:"description"`
+	GitHubIssue  int    `json:"github_issue"`
+}
+
+// createTaskResponse mirrors cmd/submittask's own stdout — task/run id
+// and which workflow actually ran, plus AttachRunWarning surfaced as a
+// string rather than swallowed (see taskintake.Result's doc comment).
+type createTaskResponse struct {
+	TaskID           string `json:"task_id"`
+	RunID            string `json:"run_id"`
+	Workflow         string `json:"workflow"`
+	AttachRunWarning string `json:"attach_run_warning,omitempty"`
+}
+
+// createTaskHandler is the UI's "Delegate task" action — it does exactly
+// what cmd/submittask does (taskintake.Submit), because it's the same
+// package, not a reimplementation. This is the one control-plane action
+// in the whole app that spends real money the moment it returns
+// successfully: every real harness.invoke call in the Run it just started
+// costs real API credits. The UI is expected to confirm that with a human
+// before calling this — see cmd/controlplane/static/app.js's Work view.
+func createTaskHandler(d *deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req createTaskRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "malformed JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.RepoName == "" {
+			http.Error(w, "repo_name is required", http.StatusBadRequest)
+			return
+		}
+
+		repo, err := repositories.Get(r.Context(), d.pool, req.RepoName)
+		if errors.Is(err, repositories.ErrNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !repo.Enabled {
+			http.Error(w, fmt.Sprintf("repository %q is disabled", req.RepoName), http.StatusConflict)
+			return
+		}
+
+		workflowFile := req.WorkflowFile
+		if workflowFile == "" {
+			workflowFile = repo.DefaultWorkflow
+		}
+
+		result, err := taskintake.Submit(r.Context(), taskintake.Deps{
+			Pool:           d.pool,
+			TemporalClient: d.temporal,
+			TaskQueue:      d.taskQueue,
+			HarnessLimits:  d.harnessLimits,
+		}, taskintake.Params{
+			Repo: conductor.Repo{
+				Name:        req.RepoName,
+				CloneURL:    repo.CloneURL,
+				TestCommand: repo.TestCommand,
+			},
+			WorkflowFile: workflowFile,
+			Description:  req.Description,
+			GitHubIssue:  req.GitHubIssue,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		resp := createTaskResponse{TaskID: result.TaskID, RunID: result.RunID, Workflow: result.Workflow}
+		if result.AttachRunWarning != nil {
+			resp.AttachRunWarning = result.AttachRunWarning.Error()
+		}
+		writeJSON(w, http.StatusCreated, resp)
+	}
 }
 
 func listRepositoriesHandler(pool *pgxpool.Pool) http.HandlerFunc {
