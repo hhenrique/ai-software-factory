@@ -26,6 +26,7 @@ import (
 
 	"factory/internal/eventlog"
 	"factory/internal/repositories"
+	"factory/internal/workflowdef"
 )
 
 //go:embed static
@@ -69,19 +70,47 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// listWorkflowsHandler backs the "Default workflow" combobox — just
-// enough of docs/04's (not yet built) Workflows section to prevent typos
-// in the Repositories form, not that section itself: a plain directory
-// scan, no parse/validate-status surfacing (see that section's own "not
-// built yet" note).
+// WorkflowInfo is docs/04's Workflows section, in full now: a Workflow
+// Definition is already checked-in YAML (workflows/), so unlike
+// Repositories this needs no persistence — every field here is derived
+// fresh from disk on each request. Also backs the Repositories form's
+// "Default workflow" combobox (the .Path field), which is why this
+// existed before the rest of the section did.
+type WorkflowInfo struct {
+	Path       string     `json:"path"`
+	Workflow   string     `json:"workflow"`
+	Version    int        `json:"version"`
+	StepCount  int        `json:"step_count"`
+	Roles      []RoleInfo `json:"roles"`
+	HasTrigger bool       `json:"has_trigger"`
+	Valid      bool       `json:"valid"`
+	Errors     []string   `json:"errors,omitempty"`
+}
+
+// RoleInfo is one entry of a Workflow Definition's roles: block —
+// docs/04's Workers (Roles) section reads directly off this once that
+// slice lands, rather than its own registry (roles live inline in each
+// Workflow Definition, not as standalone data).
+type RoleInfo struct {
+	Name    string `json:"name"`
+	Harness string `json:"harness"`
+	Model   string `json:"model"`
+}
+
+// listWorkflowsHandler scans dir for *.yaml/*.yml files and parses +
+// validates each one — docs/04's Workflows section: "Validation status
+// surfaced before a Workflow can be made active." A file that fails to
+// parse or validate is still listed, Valid: false with Errors set, rather
+// than silently dropped — the whole point is surfacing the problem, not
+// hiding it.
 func listWorkflowsHandler(dir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		files, err := listWorkflowFiles(dir)
+		infos, err := listWorkflowInfo(dir)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, http.StatusOK, files)
+		writeJSON(w, http.StatusOK, infos)
 	}
 }
 
@@ -106,6 +135,55 @@ func listWorkflowFiles(dir string) ([]string, error) {
 	}
 	sort.Strings(files)
 	return files, nil
+}
+
+// listWorkflowInfo parses+validates every workflow file found by
+// listWorkflowFiles. A per-file parse/validate failure becomes an invalid
+// WorkflowInfo entry, not a request-level error — one broken YAML file
+// shouldn't hide every other one from the list.
+func listWorkflowInfo(dir string) ([]WorkflowInfo, error) {
+	files, err := listWorkflowFiles(dir)
+	if err != nil {
+		return nil, err
+	}
+	infos := make([]WorkflowInfo, len(files))
+	for i, path := range files {
+		infos[i] = loadWorkflowInfo(path)
+	}
+	return infos, nil
+}
+
+func loadWorkflowInfo(path string) WorkflowInfo {
+	info := WorkflowInfo{Path: path}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		info.Errors = []string{err.Error()}
+		return info
+	}
+	def, err := workflowdef.Parse(data)
+	if err != nil {
+		info.Errors = []string{"parse: " + err.Error()}
+		return info
+	}
+
+	info.Workflow = def.Workflow
+	info.Version = def.Version
+	info.StepCount = len(def.Steps)
+	info.HasTrigger = def.Trigger != nil
+	for name, role := range def.Roles {
+		info.Roles = append(info.Roles, RoleInfo{Name: name, Harness: role.Harness, Model: role.Model})
+	}
+	sort.Slice(info.Roles, func(i, j int) bool { return info.Roles[i].Name < info.Roles[j].Name })
+
+	if errs := workflowdef.Validate(def); len(errs) != 0 {
+		for _, e := range errs {
+			info.Errors = append(info.Errors, e.Error())
+		}
+		return info
+	}
+	info.Valid = true
+	return info
 }
 
 func listRepositoriesHandler(pool *pgxpool.Pool) http.HandlerFunc {

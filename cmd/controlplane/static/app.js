@@ -7,6 +7,7 @@
 
 const VIEWS = {
   repositories: { label: "Repositories", render: renderRepositories },
+  workflows: { label: "Workflows", render: renderWorkflows },
 };
 
 const DEFAULT_VIEW = "repositories";
@@ -117,25 +118,27 @@ function renderRepositories(container) {
 
   // Fetched once, reused both by the add-form's select and by every
   // row's edit-mode select (populateWorkflowSelect below) — one round
-  // trip regardless of how many rows get edited.
-  let workflowFiles = [];
-  const workflowFilesReady = apiRequest("/api/workflows")
-    .then((files) => {
-      workflowFiles = files || [];
-      populateWorkflowSelect(document.getElementById("rf-workflow"), workflowFiles, "");
+  // trip regardless of how many rows get edited. /api/workflows returns
+  // WorkflowInfo objects (see cmd/controlplane's Workflows view), not
+  // bare paths — only .path/.valid are used here.
+  let workflows = [];
+  const workflowsReady = apiRequest("/api/workflows")
+    .then((infos) => {
+      workflows = infos || [];
+      populateWorkflowSelect(document.getElementById("rf-workflow"), workflows, "");
     })
     .catch(showError);
 
-  function populateWorkflowSelect(select, files, selected) {
+  function populateWorkflowSelect(select, infos, selected) {
     select.innerHTML = "";
     const none = document.createElement("option");
     none.value = "";
     none.textContent = "(none)";
     select.appendChild(none);
-    for (const path of files) {
+    for (const info of infos) {
       const option = document.createElement("option");
-      option.value = path;
-      option.textContent = path;
+      option.value = info.path;
+      option.textContent = info.path + (info.valid ? "" : "  (invalid)");
       select.appendChild(option);
     }
     select.value = selected || "";
@@ -292,7 +295,7 @@ function renderRepositories(container) {
     const testCommandInput = editForm.querySelector(".edit-test-command");
     testCommandInput.value = repo.test_command || "";
     const workflowSelect = editForm.querySelector(".edit-workflow");
-    workflowFilesReady.then(() => populateWorkflowSelect(workflowSelect, workflowFiles, repo.default_workflow));
+    workflowsReady.then(() => populateWorkflowSelect(workflowSelect, workflows, repo.default_workflow));
 
     const actions = document.createElement("div");
     actions.className = "list-row-actions";
@@ -366,4 +369,103 @@ function renderRepositories(container) {
   });
 
   refresh();
+}
+
+// ---- workflows view ----
+
+function renderWorkflows(container) {
+  const wrap = document.createElement("div");
+
+  const errorBanner = document.createElement("div");
+  errorBanner.className = "error-banner";
+  errorBanner.style.display = "none";
+  wrap.appendChild(errorBanner);
+
+  function showError(err) {
+    errorBanner.textContent = String(err.message || err);
+    errorBanner.style.display = "block";
+  }
+
+  const listCard = document.createElement("div");
+  listCard.className = "card";
+  const header = document.createElement("div");
+  header.className = "card-header";
+  header.innerHTML = `<h2 id="wf-count">Workflow definitions</h2>`;
+  listCard.appendChild(header);
+  const list = document.createElement("div");
+  list.className = "list";
+  listCard.appendChild(list);
+  wrap.appendChild(listCard);
+
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = "Read-only: scanned from workflows/ on disk. Edited as YAML, checked into git.";
+  wrap.appendChild(hint);
+
+  container.appendChild(wrap);
+
+  apiRequest("/api/workflows")
+    .then((infos) => renderList(infos || []))
+    .catch(showError);
+
+  function renderList(infos) {
+    const validCount = infos.filter((i) => i.valid).length;
+    document.getElementById("wf-count").textContent =
+      `Workflow definitions — ${infos.length} total, ${validCount} valid`;
+
+    list.innerHTML = "";
+    if (infos.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      empty.textContent = "No workflow definitions found.";
+      list.appendChild(empty);
+      return;
+    }
+
+    for (const info of infos) {
+      list.appendChild(buildWorkflowRow(info));
+    }
+  }
+
+  function buildWorkflowRow(info) {
+    const row = document.createElement("div");
+    row.className = "list-row";
+
+    const main = document.createElement("div");
+    main.className = "list-row-main";
+
+    const name = document.createElement("div");
+    name.className = "list-row-name";
+    name.textContent = info.workflow ? `${info.workflow} (v${info.version})` : info.path;
+    main.appendChild(name);
+
+    const meta = document.createElement("div");
+    meta.className = "list-row-meta";
+    const roleSummary = (info.roles || []).map((r) => `${r.name}: ${r.harness}/${r.model}`).join(", ");
+    const bits = [info.path];
+    if (info.step_count) bits.push(info.step_count + " steps");
+    if (roleSummary) bits.push(roleSummary);
+    if (info.has_trigger) bits.push("triggered");
+    meta.textContent = bits.join("  ·  ");
+    main.appendChild(meta);
+
+    if (!info.valid && info.errors && info.errors.length > 0) {
+      const errList = document.createElement("div");
+      errList.className = "list-row-meta text-negative";
+      errList.textContent = info.errors.join("; ");
+      main.appendChild(errList);
+    }
+
+    row.appendChild(main);
+
+    const actions = document.createElement("div");
+    actions.className = "list-row-actions";
+    const badge = document.createElement("span");
+    badge.className = "badge " + (info.valid ? "valid" : "invalid");
+    badge.textContent = info.valid ? "Valid" : "Invalid";
+    actions.appendChild(badge);
+    row.appendChild(actions);
+
+    return row;
+  }
 }

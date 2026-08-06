@@ -351,6 +351,10 @@ button.link:hover {
 
 .badge.enabled { color: var(--color-positive); }
 .badge.disabled { color: var(--color-text-muted); }
+.badge.valid { color: var(--color-positive); }
+.badge.invalid { color: var(--color-negative); }
+
+.text-negative { color: var(--color-negative); }
 
 .empty-state {
   color: var(--color-text-muted);

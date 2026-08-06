@@ -261,12 +261,27 @@ view that would actually depend on `status` being accurate.
   02-workflow-definition-schema.md) surfaced before a Workflow can be
   made active
 
-Not built yet — still YAML files on disk (`workflows/`,
-`internal/workflowdef/fixtures`), no `cmd/controlplane` nav entry.
-Unlike Repositories, this needs no new persistence: a Workflow
-Definition is already checked-in YAML, so this slice is a read-only scan
-+ parse + validate of `workflows/`, surfaced the same way `cmd/submittask`
-already validates a definition before using it.
+#### Current state: `cmd/controlplane`, second slice
+
+Built as a read-only scan, no new persistence — a Workflow Definition is
+already checked-in YAML, so there's no user-entered data to store.
+`GET /api/workflows` scans `workflows/` (`internal/workflowdef` fixtures
+are reference/test definitions, not deployable ones — see that package's
+doc comment — and stay out of this scan), parses and validates each file
+the same way `cmd/submittask` already does before using one, and returns
+per-file: name, version, step count, its `roles:` block (name/harness/
+model), whether it declares a `trigger`, and pass/fail with the actual
+validation errors. A file that fails to parse or validate is still
+listed — invalid, with why — rather than silently dropped; the point is
+surfacing the problem. No id/version-hash/trigger-*config* display
+beyond what's listed above yet, and no way to activate/deactivate a
+Workflow from the UI (doc 02: Workflow Definitions aren't versioned
+beyond a single active definition + provenance hash in v1 to begin
+with).
+
+This same endpoint backs the Repositories form's "Default workflow"
+combobox (added in that slice, before this one existed) — one scan, two
+consumers.
 
 ### Workers (Roles)
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -94,6 +95,74 @@ func TestListWorkflowFiles(t *testing.T) {
 func TestListWorkflowFilesMissingDirErrors(t *testing.T) {
 	if _, err := listWorkflowFiles("../../does-not-exist"); err == nil {
 		t.Fatalf("expected an error for a missing directory")
+	}
+}
+
+func TestLoadWorkflowInfoValidFile(t *testing.T) {
+	info := loadWorkflowInfo("../../workflows/issue-to-pr-claude-only.yaml")
+	if !info.Valid {
+		t.Fatalf("Valid = false, Errors = %v", info.Errors)
+	}
+	if info.Workflow != "issue-to-pr-claude-only" {
+		t.Errorf("Workflow = %q", info.Workflow)
+	}
+	if info.StepCount == 0 {
+		t.Errorf("StepCount = 0, want > 0")
+	}
+	if len(info.Roles) != 3 {
+		t.Errorf("Roles = %v, want 3 (planner, coder, reviewer)", info.Roles)
+	}
+	for _, role := range info.Roles {
+		if role.Harness != "claude-code" {
+			t.Errorf("role %q harness = %q, want claude-code", role.Name, role.Harness)
+		}
+	}
+}
+
+func TestLoadWorkflowInfoMissingFile(t *testing.T) {
+	info := loadWorkflowInfo("../../workflows/does-not-exist.yaml")
+	if info.Valid {
+		t.Fatalf("Valid = true for a missing file")
+	}
+	if len(info.Errors) == 0 {
+		t.Errorf("expected a non-empty Errors")
+	}
+}
+
+func TestListWorkflowInfoIncludesEveryFileEvenIfOneParticularFails(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/good.yaml", []byte(`
+workflow: good
+version: 1
+steps:
+  - id: only
+    type: tool
+    action: noop
+    next: COMPLETED
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/bad.yaml", []byte("not: [valid yaml"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	infos, err := listWorkflowInfo(dir)
+	if err != nil {
+		t.Fatalf("listWorkflowInfo: %v", err)
+	}
+	if len(infos) != 2 {
+		t.Fatalf("len(infos) = %d, want 2", len(infos))
+	}
+
+	byPath := map[string]WorkflowInfo{}
+	for _, info := range infos {
+		byPath[info.Path] = info
+	}
+	if !byPath[dir+"/good.yaml"].Valid {
+		t.Errorf("good.yaml: Valid = false, Errors = %v", byPath[dir+"/good.yaml"].Errors)
+	}
+	if byPath[dir+"/bad.yaml"].Valid || len(byPath[dir+"/bad.yaml"].Errors) == 0 {
+		t.Errorf("bad.yaml: expected Valid = false with a non-empty Errors, got %+v", byPath[dir+"/bad.yaml"])
 	}
 }
 
