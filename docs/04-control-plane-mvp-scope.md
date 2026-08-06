@@ -38,6 +38,23 @@ charts, anomaly-detection dashboards beyond the oscillation/deadlock
 detection already built into the state machine itself. Add these once
 there's enough Run volume for them to be meaningful.
 
+#### Current state: Inbox
+
+The "Runs blocked on a human" bullet above is built — as its own focused
+view (`cmd/controlplane`'s Inbox section), not as part of a full Overview
+dashboard, which stays unbuilt otherwise. `internal/inbox.List` finds
+every Run whose latest transition landed on `REVIEW_PENDING` (oldest
+first); resume/cancel actions send the real
+`conductor.HumanDecision` signal (`internal/inbox.SignalResume`/
+`SignalCancel`) — the first caller of that contract from outside the
+process that started the Run. Deliberately narrow, matching this doc's
+"keep it thin" principle: not a general Runs browser (that stays
+`cmd/runsview`'s job, unchanged) — just the one thing genuinely blocked
+on a human. Resume's step-id field is a combobox populated from the
+Run's own Workflow Definition (`GET /api/workflows`' per-file step-id
+list), not free text, for the same typo-prevention reason Repositories'
+default-workflow field is a combobox rather than a text input.
+
 ### Repositories
 
 Per-repo configuration, minimum required fields:
@@ -217,18 +234,31 @@ entity, not the entity itself.
 
 #### Manual Task submission, current state
 
-`cmd/submittask` is the MVP's real Task/Run entry point — a CLI, not a
-control-plane UI form (consistent with keeping the control plane thin
-until there's enough Run volume to justify investing in one, per this
-doc's Principle section). Given a repo (clone URL, test command) and a
-task description — either free text or `-github-issue N`, which shells
-out to `gh issue view` for the title/body, the same established
-gh-owns-auth pattern as `internal/activities/pr` — it records a Task
+Real Task/Run submission now has two entry points sharing one
+implementation: `cmd/submittask` (CLI) and `cmd/controlplane`'s Work
+section (UI form) both call `internal/taskintake.Submit` — extracted
+specifically so this stays one code path rather than two that could
+drift. Given a repo (in the UI: picked from already-registered, enabled
+Repositories; on the CLI: `-repo <identity>` or explicit `-repo-clone-
+url`/`-test-command`) and a task description — either free text or a
+GitHub issue number, which shells out to `gh issue view` for the
+title/body, the same established gh-owns-auth pattern as
+`internal/activities/pr` — it records a Task
 (`internal/backlog.InsertHumanTask`, `source: human`) and immediately
 starts a real Run against it. There's no decoupled scheduler (see
 00-vision-and-principles.md's deferred list), so submitting a Task and
 starting its Run are one action for now, not two; `AttachRun` records
-the Run id back onto the Task row right after Temporal accepts it.
+the Run id back onto the Task row right after Temporal accepts it. The
+UI form confirms with the human before submitting — this is the one
+control-plane action that spends real API credits the moment it
+succeeds, and the confirm dialog says so.
+
+A read-only Task list (`GET /api/tasks` / `internal/backlog.List`) is
+also real now — every Task from both sources (human-submitted here, and
+`auto-generated:review-finding` from the out-of-scope path below), not
+just the human ones. No edit/delete on a Task — matches this doc's
+Repositories precedent of exposing exactly the operations there's a real
+use for, not a full CRUD surface by default.
 
 This is also the first place a GitHub issue becomes a Task, ahead of the
 "near future: GitHub/tracker integration" this section anticipates —
@@ -282,6 +312,33 @@ with).
 This same endpoint backs the Repositories form's "Default workflow"
 combobox (added in that slice, before this one existed) — one scan, two
 consumers.
+
+#### Graph visualization prototypes, not a decision yet
+
+`GET /api/workflow-graph?path=` serves one Workflow Definition's full
+node/edge graph (every step, every `on:`/`next:`/`on_malformed_output`
+edge, terminal states included) — deliberately not requiring
+`workflowdef.Validate` to pass first, since seeing the actual structure
+(including a broken one, e.g. an unbounded cycle) is exactly when a
+human most wants to look at it. Three read-only rendering approaches
+consume it as `workflow_v1`/`v2`/`v3` nav entries — a genuine
+side-by-side comparison, not three redundant features:
+
+- **v1**: zero dependencies — hand-rolled BFS-layer layout, hand-rolled
+  pan/zoom (drag + wheel on an SVG `<g transform>`).
+- **v2**: D3 (`d3-zoom` for pan/zoom) + dagre for layout — a real
+  layered-graph algorithm instead of v1's approximation, noticeably
+  better edge routing around back-edges (every reference Workflow
+  Definition has at least one, e.g. `verify` ↔ `revise_verify`).
+- **v3**: Cytoscape.js + the `cytoscape-dagre` layout extension — pan/
+  zoom/node-dragging come from the library via config, essentially no
+  custom interaction code; heaviest vendored dependency of the three.
+
+Libraries are vendored under `cmd/controlplane/static/vendor/` (see that
+directory's `README.md`), not CDN-loaded. **Not decided which one (or
+none) survives** — this doc will be updated once one is picked, at
+which point the other two should come back out rather than lingering as
+dead nav entries.
 
 ### Workers (Roles)
 

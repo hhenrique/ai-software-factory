@@ -369,3 +369,115 @@ button.link:hover {
   padding: var(--space-3);
   font-size: 0.85rem;
 }
+
+/* ---- workflow graph visualizations (workflow_v1/v2/v3) ---- */
+
+:root {
+  --color-node-tool: #3a7bd5;
+  --color-node-agent: #b56bd6;
+  --color-node-terminal: #4a4a52;
+  --color-edge: #55555d;
+  --color-edge-label: #9a9aa2;
+}
+
+.graph-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.graph-card .card-header {
+  padding: var(--space-4);
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.graph-workflow-select {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  color: var(--color-text);
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  min-width: 260px;
+}
+
+.graph-canvas-wrap {
+  position: relative;
+  width: 100%;
+  height: 640px;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px) 0 0 / 24px 24px;
+  cursor: grab;
+}
+
+.graph-canvas-wrap.grabbing {
+  cursor: grabbing;
+}
+
+.graph-canvas, .graph-canvas-wrap > svg, .graph-canvas-wrap > div.cy-canvas-host {
+  width: 100%;
+  height: 100%;
+}
+
+.graph-node rect, .graph-node .graph-node-shape {
+  stroke-width: 1.5;
+  fill: var(--color-surface-raised);
+  stroke: var(--color-border);
+}
+
+.graph-node.kind-tool .graph-node-shape { stroke: var(--color-node-tool); }
+.graph-node.kind-agent .graph-node-shape { stroke: var(--color-node-agent); }
+.graph-node.kind-terminal .graph-node-shape { stroke: var(--color-node-terminal); fill: var(--color-bg); }
+
+.graph-node text {
+  fill: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.graph-node .graph-node-sub {
+  fill: var(--color-text-muted);
+  font-size: 10px;
+}
+
+.graph-edge-path {
+  fill: none;
+  stroke: var(--color-edge);
+  stroke-width: 1.5;
+}
+
+.graph-edge-label {
+  fill: var(--color-edge-label);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.graph-legend {
+  display: flex;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--color-border);
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  flex-wrap: wrap;
+}
+
+.graph-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.graph-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+  border: 1.5px solid currentColor;
+}

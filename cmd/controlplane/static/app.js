@@ -11,6 +11,9 @@ const VIEWS = {
   workers: { label: "Workers", render: renderWorkers },
   work: { label: "Work", render: renderWork },
   inbox: { label: "Inbox", render: renderInbox },
+  workflow_v1: { label: "Workflow (v1: vanilla SVG)", render: renderWorkflowV1 },
+  workflow_v2: { label: "Workflow (v2: D3 + dagre)", render: renderWorkflowV2 },
+  workflow_v3: { label: "Workflow (v3: Cytoscape.js)", render: renderWorkflowV3 },
 };
 
 const DEFAULT_VIEW = "repositories";
@@ -90,6 +93,79 @@ function populateWorkflowSelect(select, infos, selected) {
     select.appendChild(option);
   }
   select.value = selected || "";
+}
+
+// ---- shared graph-view scaffold (workflow_v1/v2/v3) ----
+
+// buildGraphViewShell is the common chrome every visualization prototype
+// shares: an error banner, a workflow picker, a canvas area sized for a
+// real graph (not a chat-bubble-sized card), and a legend row. Each
+// prototype supplies its own render(canvasEl, graph) — everything about
+// *how* the graph is drawn and panned/zoomed is prototype-specific by
+// design (that's the point of having three), but the surrounding page
+// structure shouldn't be reinvented three times.
+function buildGraphViewShell(container, opts) {
+  const wrap = document.createElement("div");
+
+  const errorBanner = document.createElement("div");
+  errorBanner.className = "error-banner";
+  errorBanner.style.display = "none";
+  wrap.appendChild(errorBanner);
+  function showError(err) {
+    errorBanner.textContent = String(err.message || err);
+    errorBanner.style.display = "block";
+  }
+
+  const card = document.createElement("div");
+  card.className = "card graph-card";
+  card.innerHTML = `
+    <div class="card-header">
+      <h2>${opts.title}</h2>
+      <select class="graph-workflow-select"><option value="">(loading...)</option></select>
+    </div>
+    <div class="graph-canvas-wrap"><div class="graph-canvas"></div></div>
+    <div class="graph-legend">
+      <span class="graph-legend-item"><span class="graph-legend-swatch" style="color:var(--color-node-tool)"></span>tool step</span>
+      <span class="graph-legend-item"><span class="graph-legend-swatch" style="color:var(--color-node-agent)"></span>agent step</span>
+      <span class="graph-legend-item"><span class="graph-legend-swatch" style="color:var(--color-node-terminal)"></span>terminal state</span>
+      <span class="graph-legend-item">${opts.interactionHint}</span>
+    </div>
+  `;
+  wrap.appendChild(card);
+  container.appendChild(wrap);
+
+  const select = card.querySelector(".graph-workflow-select");
+  const canvas = card.querySelector(".graph-canvas");
+
+  apiRequest("/api/workflows")
+    .then((infos) => {
+      infos = infos || [];
+      select.innerHTML = "";
+      for (const info of infos) {
+        const option = document.createElement("option");
+        option.value = info.path;
+        option.textContent = info.path;
+        select.appendChild(option);
+      }
+      if (infos.length > 0) {
+        loadAndRender(infos[0].path);
+      } else {
+        showError(new Error("No workflow definitions found."));
+      }
+    })
+    .catch(showError);
+
+  select.addEventListener("change", () => loadAndRender(select.value));
+
+  function loadAndRender(path) {
+    if (!path) return;
+    canvas.innerHTML = "";
+    apiRequest("/api/workflow-graph?path=" + encodeURIComponent(path))
+      .then((graph) => opts.render(canvas, graph))
+      .catch(showError);
+  }
+
+  return { canvas, showError };
 }
 
 // ---- repositories view ----
