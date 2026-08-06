@@ -104,6 +104,14 @@ function populateWorkflowSelect(select, infos, selected) {
 // *how* the graph is drawn and panned/zoomed is prototype-specific by
 // design (that's the point of having three), but the surrounding page
 // structure shouldn't be reinvented three times.
+// buildGraphViewShell is the common chrome every visualization prototype
+// shares. opts.layouts is a list of {id, label, render(canvas, graph)} —
+// each prototype registers several layout algorithms rather than one, so
+// they can be compared live via the second dropdown without leaving the
+// page. The graph itself (including cluster membership — see
+// cmd/controlplane's computeClusters) is fetched once per workflow
+// selection and reused across every layout switch; only re-rendering is
+// re-run, not a new API call.
 function buildGraphViewShell(container, opts) {
   const wrap = document.createElement("div");
 
@@ -116,53 +124,83 @@ function buildGraphViewShell(container, opts) {
     errorBanner.style.display = "block";
   }
 
+  const layoutOptionsHTML = opts.layouts
+    .map((l) => `<option value="${l.id}">${l.label}</option>`)
+    .join("");
+
   const card = document.createElement("div");
   card.className = "card graph-card";
   card.innerHTML = `
     <div class="card-header">
       <h2>${opts.title}</h2>
       <select class="graph-workflow-select"><option value="">(loading...)</option></select>
+      <select class="graph-layout-select">${layoutOptionsHTML}</select>
     </div>
     <div class="graph-canvas-wrap"><div class="graph-canvas"></div></div>
     <div class="graph-legend">
       <span class="graph-legend-item"><span class="graph-legend-swatch" style="color:var(--color-node-tool)"></span>tool step</span>
       <span class="graph-legend-item"><span class="graph-legend-swatch" style="color:var(--color-node-agent)"></span>agent step</span>
       <span class="graph-legend-item"><span class="graph-legend-swatch" style="color:var(--color-node-terminal)"></span>terminal state</span>
+      <span class="graph-legend-item"><span class="graph-legend-swatch" style="color:var(--color-cluster-ring)"></span>back/forth loop (cluster)</span>
       <span class="graph-legend-item">${opts.interactionHint}</span>
     </div>
   `;
   wrap.appendChild(card);
   container.appendChild(wrap);
 
-  const select = card.querySelector(".graph-workflow-select");
+  const workflowSelect = card.querySelector(".graph-workflow-select");
+  const layoutSelect = card.querySelector(".graph-layout-select");
   const canvas = card.querySelector(".graph-canvas");
+
+  let currentGraph = null;
 
   apiRequest("/api/workflows")
     .then((infos) => {
       infos = infos || [];
-      select.innerHTML = "";
+      workflowSelect.innerHTML = "";
       for (const info of infos) {
         const option = document.createElement("option");
         option.value = info.path;
         option.textContent = info.path;
-        select.appendChild(option);
+        workflowSelect.appendChild(option);
       }
       if (infos.length > 0) {
-        loadAndRender(infos[0].path);
+        loadGraph(infos[0].path);
       } else {
         showError(new Error("No workflow definitions found."));
       }
     })
     .catch(showError);
 
-  select.addEventListener("change", () => loadAndRender(select.value));
+  workflowSelect.addEventListener("change", () => loadGraph(workflowSelect.value));
+  layoutSelect.addEventListener("change", renderCurrentLayout);
 
-  function loadAndRender(path) {
+  function loadGraph(path) {
     if (!path) return;
     canvas.innerHTML = "";
     apiRequest("/api/workflow-graph?path=" + encodeURIComponent(path))
-      .then((graph) => opts.render(canvas, graph))
+      .then((graph) => {
+        currentGraph = graph;
+        renderCurrentLayout();
+      })
       .catch(showError);
+  }
+
+  function renderCurrentLayout() {
+    if (!currentGraph) return;
+    canvas.innerHTML = "";
+    const layout = opts.layouts.find((l) => l.id === layoutSelect.value) || opts.layouts[0];
+    try {
+      // A layout's render may be async (ELK's layout() is Promise-based) —
+      // handle both without every synchronous layout needing to wrap
+      // itself in one just to match a common async signature.
+      const result = layout.render(canvas, currentGraph);
+      if (result && typeof result.catch === "function") {
+        result.catch(showError);
+      }
+    } catch (err) {
+      showError(err);
+    }
   }
 
   return { canvas, showError };

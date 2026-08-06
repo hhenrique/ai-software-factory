@@ -378,6 +378,8 @@ button.link:hover {
   --color-node-terminal: #4a4a52;
   --color-edge: #55555d;
   --color-edge-label: #9a9aa2;
+  --color-cluster-ring: #e0b23c;
+  --color-cluster-fill: rgba(224, 178, 60, 0.08);
 }
 
 .graph-card {
@@ -393,7 +395,7 @@ button.link:hover {
   gap: var(--space-3);
 }
 
-.graph-workflow-select {
+.graph-workflow-select, .graph-layout-select {
   background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
@@ -401,7 +403,14 @@ button.link:hover {
   padding: var(--space-2) var(--space-3);
   font-family: var(--font-mono);
   font-size: 0.85rem;
+}
+
+.graph-workflow-select {
   min-width: 260px;
+}
+
+.graph-layout-select {
+  min-width: 220px;
 }
 
 .graph-canvas-wrap {
@@ -480,4 +489,19 @@ button.link:hover {
   border-radius: 3px;
   display: inline-block;
   border: 1.5px solid currentColor;
+}
+
+.graph-cluster-hull {
+  fill: var(--color-cluster-fill);
+  stroke: var(--color-cluster-ring);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+
+/* Cytoscape.js compound (parent/cluster) node styling — v3's compound
+   layout draws the cluster container as a real node, not an SVG overlay
+   like v1/v2's hull path, so it needs its own selector rather than
+   .graph-cluster-hull. */
+.cy-cluster-parent {
+  background-opacity: 0.06;
 }

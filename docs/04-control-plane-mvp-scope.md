@@ -317,28 +317,55 @@ consumers.
 
 `GET /api/workflow-graph?path=` serves one Workflow Definition's full
 node/edge graph (every step, every `on:`/`next:`/`on_malformed_output`
-edge, terminal states included) — deliberately not requiring
-`workflowdef.Validate` to pass first, since seeing the actual structure
-(including a broken one, e.g. an unbounded cycle) is exactly when a
-human most wants to look at it. Three read-only rendering approaches
-consume it as `workflow_v1`/`v2`/`v3` nav entries — a genuine
-side-by-side comparison, not three redundant features:
+edge, terminal states included), plus `GraphCluster` membership — real
+back/forth loops found via Tarjan's algorithm (`computeClusters` in
+`cmd/controlplane/graph.go`; same approach as
+`internal/workflowdef`'s own cycle detection, a separate implementation
+because this graph also has terminal-state pseudo-nodes that one
+doesn't). Deliberately doesn't require `workflowdef.Validate` to pass
+first — seeing the actual structure, including a broken one, is exactly
+when a human most wants to look at it.
 
-- **v1**: zero dependencies — hand-rolled BFS-layer layout, hand-rolled
-  pan/zoom (drag + wheel on an SVG `<g transform>`).
-- **v2**: D3 (`d3-zoom` for pan/zoom) + dagre for layout — a real
-  layered-graph algorithm instead of v1's approximation, noticeably
-  better edge routing around back-edges (every reference Workflow
-  Definition has at least one, e.g. `verify` ↔ `revise_verify`).
-- **v3**: Cytoscape.js + the `cytoscape-dagre` layout extension — pan/
-  zoom/node-dragging come from the library via config, essentially no
-  custom interaction code; heaviest vendored dependency of the three.
+Three prototypes (`workflow_v1`/`v2`/`v3` nav entries) each expose
+several layout algorithms against that same data (a second dropdown
+alongside the workflow picker) — eleven layout runs total, screenshotted
+and ranked in [this
+report](https://claude.ai/code/artifact/152c78a5-2eec-4578-979a-2b97c8dc32a4).
+Short version: plain layered/Sugiyama layout (dagre — every prototype's
+original baseline) ranks a node by longest path from the entry step,
+which scatters a loop's members across separate ranks instead of
+grouping them. Three different fixes were tried:
+
+- **v1** (zero dependencies): a hand-rolled "clustered layered" layout
+  (condense each cluster into one rank slot, expand at render time) and
+  a hand-rolled force-directed layout, alongside the original BFS-ranked
+  baseline.
+- **v2** (D3): dagre in both directions, a `d3-force` layout with a
+  ~15-line custom clustering force, and ELK (`elkjs`) — the one engine
+  here with real hierarchical/compound-node support, so a cluster is an
+  actual nested container the top-level layout places as one block.
+- **v3** (Cytoscape.js): dagre, built-in `cose`, `cose-bilkent` flat,
+  and `cose-bilkent` with clusters as real Cytoscape compound (parent)
+  nodes.
+
+**Verdict, not yet acted on**: compound/hierarchical containment (ELK's
+nested nodes; Cytoscape's compound parent nodes) is the only approach
+where a cluster's boundary is structurally enforced by the layout engine
+rather than inferred afterward as a bounding box around wherever members
+landed — the bounding-box approach (v1's clustered layout, v2's
+`d3-force`) works for this graph but can visually mis-include an
+unrelated nearby node in a denser one (observed directly: v1's
+force-directed layout's hull catches `REVIEW_PENDING` inside it, which
+isn't a cluster member). Cytoscape + `cose-bilkent` (compound) is the
+lead candidate — least code, real containment, pan/zoom/drag all built
+in; ELK (v2) is the fallback if left-to-right procedural reading order
+matters more than its 1.6MB footprint for a given use.
 
 Libraries are vendored under `cmd/controlplane/static/vendor/` (see that
-directory's `README.md`), not CDN-loaded. **Not decided which one (or
-none) survives** — this doc will be updated once one is picked, at
-which point the other two should come back out rather than lingering as
-dead nav entries.
+directory's `README.md`), not CDN-loaded. **Still not decided** — this
+doc will be updated once a direction is picked, at which point every
+other layout option should come back out rather than linger as dead
+nav entries.
 
 ### Workers (Roles)
 
