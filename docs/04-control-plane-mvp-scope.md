@@ -292,11 +292,24 @@ consumers.
   causing merge-conflict storms — start with a simple per-repo
   concurrency cap, not a general scheduling system
 
-Not built yet — Roles live inline in each Workflow Definition's `roles:`
-block (02-workflow-definition-schema.md), not a standalone registry, so
-this slice would be a derived read-only view (aggregate `roles:` across
-every known Workflow Definition) rather than its own table, same as the
-Workflows section above.
+#### Current state: `cmd/controlplane`, third slice
+
+Built as a derived read-only view, same as Workflows — no standalone
+role registry, since roles live inline in each Workflow Definition's
+`roles:` block. `GET /api/workers` reuses the same `workflows/` scan as
+`GET /api/workflows` and aggregates every role usage by **(harness,
+model)**, not by role name: two workflows' "coder" roles pointing at the
+same harness/model are one blast-radius group even if named differently;
+the same role name in two workflows pointing at different models is not.
+That's the literal reading of "changing a role's backing model shows its
+blast radius" — the thing a config change actually touches is the
+(harness, model) pair, and each group lists every (Workflow, role name)
+using it.
+
+Concurrency limits are not surfaced — nothing in the system tracks or
+enforces them yet (this doc already called them "if needed"), so there's
+no real data to show; a fabricated column would be worse than an absent
+one.
 
 ## Explicitly out of scope for MVP (see 00-vision-and-principles.md)
 

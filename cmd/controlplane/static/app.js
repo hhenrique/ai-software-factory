@@ -8,6 +8,7 @@
 const VIEWS = {
   repositories: { label: "Repositories", render: renderRepositories },
   workflows: { label: "Workflows", render: renderWorkflows },
+  workers: { label: "Workers", render: renderWorkers },
 };
 
 const DEFAULT_VIEW = "repositories";
@@ -463,6 +464,97 @@ function renderWorkflows(container) {
     const badge = document.createElement("span");
     badge.className = "badge " + (info.valid ? "valid" : "invalid");
     badge.textContent = info.valid ? "Valid" : "Invalid";
+    actions.appendChild(badge);
+    row.appendChild(actions);
+
+    return row;
+  }
+}
+
+// ---- workers view ----
+
+function renderWorkers(container) {
+  const wrap = document.createElement("div");
+
+  const errorBanner = document.createElement("div");
+  errorBanner.className = "error-banner";
+  errorBanner.style.display = "none";
+  wrap.appendChild(errorBanner);
+
+  function showError(err) {
+    errorBanner.textContent = String(err.message || err);
+    errorBanner.style.display = "block";
+  }
+
+  const listCard = document.createElement("div");
+  listCard.className = "card";
+  const header = document.createElement("div");
+  header.className = "card-header";
+  header.innerHTML = `<h2 id="worker-count">Workers</h2>`;
+  listCard.appendChild(header);
+  const list = document.createElement("div");
+  list.className = "list";
+  listCard.appendChild(list);
+  wrap.appendChild(listCard);
+
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = "Derived from every Workflow Definition's roles: block, grouped by " +
+    "(harness, model) — changing one here means changing all of its usages below at once.";
+  wrap.appendChild(hint);
+
+  container.appendChild(wrap);
+
+  apiRequest("/api/workers")
+    .then((workers) => renderList(workers || []))
+    .catch(showError);
+
+  function renderList(workers) {
+    const usageCount = workers.reduce((sum, w) => sum + w.usages.length, 0);
+    document.getElementById("worker-count").textContent =
+      `Workers — ${workers.length} distinct, ${usageCount} role usages`;
+
+    list.innerHTML = "";
+    if (workers.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      empty.textContent = "No roles found in any Workflow Definition.";
+      list.appendChild(empty);
+      return;
+    }
+
+    for (const worker of workers) {
+      list.appendChild(buildWorkerRow(worker));
+    }
+  }
+
+  function buildWorkerRow(worker) {
+    const row = document.createElement("div");
+    row.className = "list-row";
+
+    const main = document.createElement("div");
+    main.className = "list-row-main";
+
+    const name = document.createElement("div");
+    name.className = "list-row-name";
+    name.textContent = `${worker.harness} / ${worker.model}`;
+    main.appendChild(name);
+
+    const usageText = worker.usages
+      .map((u) => `${u.workflow}: ${u.role}` + (u.effort ? ` (effort: ${u.effort})` : ""))
+      .join(", ");
+    const meta = document.createElement("div");
+    meta.className = "list-row-meta";
+    meta.textContent = usageText;
+    main.appendChild(meta);
+
+    row.appendChild(main);
+
+    const actions = document.createElement("div");
+    actions.className = "list-row-actions";
+    const badge = document.createElement("span");
+    badge.className = "badge enabled";
+    badge.textContent = worker.usages.length + " usage" + (worker.usages.length === 1 ? "" : "s");
     actions.appendChild(badge);
     row.appendChild(actions);
 

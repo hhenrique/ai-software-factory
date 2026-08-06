@@ -56,6 +56,7 @@ func main() {
 	mux.HandleFunc("POST /api/repositories/update", updateRepositoryHandler(pool))
 	mux.HandleFunc("POST /api/repositories/delete", deleteRepositoryHandler(pool))
 	mux.HandleFunc("GET /api/workflows", listWorkflowsHandler(envOr("CONTROLPLANE_WORKFLOWS_DIR", "workflows")))
+	mux.HandleFunc("GET /api/workers", listWorkersHandler(envOr("CONTROLPLANE_WORKFLOWS_DIR", "workflows")))
 
 	log.Printf("controlplane: listening on %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
@@ -87,14 +88,15 @@ type WorkflowInfo struct {
 	Errors     []string   `json:"errors,omitempty"`
 }
 
-// RoleInfo is one entry of a Workflow Definition's roles: block —
-// docs/04's Workers (Roles) section reads directly off this once that
-// slice lands, rather than its own registry (roles live inline in each
-// Workflow Definition, not as standalone data).
+// RoleInfo is one entry of a Workflow Definition's roles: block — the raw
+// material docs/04's Workers (Roles) section aggregates by (harness,
+// model) into WorkerInfo below, rather than its own registry (roles live
+// inline in each Workflow Definition, not as standalone data).
 type RoleInfo struct {
-	Name    string `json:"name"`
-	Harness string `json:"harness"`
-	Model   string `json:"model"`
+	Name    string            `json:"name"`
+	Harness string            `json:"harness"`
+	Model   string            `json:"model"`
+	Params  map[string]string `json:"params,omitempty"`
 }
 
 // listWorkflowsHandler scans dir for *.yaml/*.yml files and parses +
@@ -172,7 +174,7 @@ func loadWorkflowInfo(path string) WorkflowInfo {
 	info.StepCount = len(def.Steps)
 	info.HasTrigger = def.Trigger != nil
 	for name, role := range def.Roles {
-		info.Roles = append(info.Roles, RoleInfo{Name: name, Harness: role.Harness, Model: role.Model})
+		info.Roles = append(info.Roles, RoleInfo{Name: name, Harness: role.Harness, Model: role.Model, Params: role.Params})
 	}
 	sort.Slice(info.Roles, func(i, j int) bool { return info.Roles[i].Name < info.Roles[j].Name })
 
@@ -184,6 +186,92 @@ func loadWorkflowInfo(path string) WorkflowInfo {
 	}
 	info.Valid = true
 	return info
+}
+
+// WorkerInfo is docs/04's Workers (Roles) section: "List of configured
+// roles (name, harness, model/endpoint). Which Workflows reference each
+// role (so changing a role's backing model shows its blast radius)." A
+// "role" isn't a standalone entity anywhere in this system — it's inline
+// per-Workflow-Definition config (RoleInfo) — so this aggregates by the
+// actual thing a config change touches, the (harness, model) pair, not by
+// role name: two workflows' "coder" roles pointing at the same
+// harness/model are the same blast radius even if named differently, and
+// the same role name in two workflows pointing at different models is
+// not. Concurrency limits (also listed in that doc section) aren't here:
+// nothing in this system tracks or enforces them yet ("if needed" in the
+// doc's own words) — there's no data to surface, so this doesn't
+// fabricate a column for it.
+type WorkerInfo struct {
+	Harness string      `json:"harness"`
+	Model   string      `json:"model"`
+	Usages  []RoleUsage `json:"usages"`
+}
+
+// RoleUsage is one (Workflow, role name) pair backed by a WorkerInfo's
+// (harness, model) — the "blast radius" entries docs/04 asks for.
+type RoleUsage struct {
+	WorkflowPath string `json:"workflow_path"`
+	Workflow     string `json:"workflow"`
+	Role         string `json:"role"`
+	Effort       string `json:"effort,omitempty"`
+}
+
+// listWorkersHandler derives the Workers (Roles) view from the same scan
+// listWorkflowsHandler does — no separate registry, since roles live
+// inline in each Workflow Definition (see WorkerInfo's doc comment).
+func listWorkersHandler(dir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		infos, err := listWorkflowInfo(dir)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, aggregateWorkers(infos))
+	}
+}
+
+// aggregateWorkers groups every role usage across infos by (harness,
+// model), sorted for stable output. Roles from a file that failed
+// overall validation are still included — a role's harness/model is
+// meaningful data on its own even if some unrelated part of that file
+// (e.g. a step's context: list) has a separate problem; only a file that
+// failed to parse at all contributes no roles (WorkflowInfo.Roles is
+// simply empty in that case).
+func aggregateWorkers(infos []WorkflowInfo) []WorkerInfo {
+	type key struct{ harness, model string }
+	byKey := map[key]*WorkerInfo{}
+	var order []key
+
+	for _, info := range infos {
+		for _, role := range info.Roles {
+			k := key{role.Harness, role.Model}
+			w, ok := byKey[k]
+			if !ok {
+				w = &WorkerInfo{Harness: role.Harness, Model: role.Model}
+				byKey[k] = w
+				order = append(order, k)
+			}
+			w.Usages = append(w.Usages, RoleUsage{
+				WorkflowPath: info.Path,
+				Workflow:     info.Workflow,
+				Role:         role.Name,
+				Effort:       role.Params["effort"],
+			})
+		}
+	}
+
+	sort.Slice(order, func(i, j int) bool {
+		if order[i].harness != order[j].harness {
+			return order[i].harness < order[j].harness
+		}
+		return order[i].model < order[j].model
+	})
+
+	workers := make([]WorkerInfo, len(order))
+	for i, k := range order {
+		workers[i] = *byKey[k]
+	}
+	return workers
 }
 
 func listRepositoriesHandler(pool *pgxpool.Pool) http.HandlerFunc {

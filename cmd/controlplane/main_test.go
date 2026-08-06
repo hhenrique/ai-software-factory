@@ -166,6 +166,95 @@ steps:
 	}
 }
 
+func TestAggregateWorkersGroupsByHarnessAndModelNotRoleName(t *testing.T) {
+	infos := []WorkflowInfo{
+		{
+			Path: "wf-a.yaml", Workflow: "wf-a",
+			Roles: []RoleInfo{
+				{Name: "coder", Harness: "claude-code", Model: "sonnet", Params: map[string]string{"effort": "high"}},
+				{Name: "reviewer", Harness: "claude-code", Model: "sonnet"},
+			},
+		},
+		{
+			Path: "wf-b.yaml", Workflow: "wf-b",
+			Roles: []RoleInfo{
+				// Different role name ("planner"), same (harness, model) as
+				// wf-a's "coder"/"reviewer" — must land in the same group.
+				{Name: "planner", Harness: "claude-code", Model: "sonnet"},
+				// Same role name "coder" as wf-a, but a different model —
+				// must NOT be grouped with wf-a's "coder".
+				{Name: "coder", Harness: "codex", Model: "chatgpt-sol"},
+			},
+		},
+	}
+
+	workers := aggregateWorkers(infos)
+	if len(workers) != 2 {
+		t.Fatalf("len(workers) = %d, want 2 ((claude-code,sonnet) and (codex,chatgpt-sol))", len(workers))
+	}
+
+	byKey := map[string]WorkerInfo{}
+	for _, w := range workers {
+		byKey[w.Harness+"/"+w.Model] = w
+	}
+
+	claudeSonnet, ok := byKey["claude-code/sonnet"]
+	if !ok {
+		t.Fatalf("missing claude-code/sonnet group: %+v", workers)
+	}
+	if len(claudeSonnet.Usages) != 3 {
+		t.Errorf("claude-code/sonnet usages = %v, want 3 (coder+reviewer from wf-a, planner from wf-b)", claudeSonnet.Usages)
+	}
+	var foundEffort bool
+	for _, u := range claudeSonnet.Usages {
+		if u.Role == "coder" && u.Workflow == "wf-a" && u.Effort == "high" {
+			foundEffort = true
+		}
+	}
+	if !foundEffort {
+		t.Errorf("expected wf-a's coder usage to carry effort=high, got %+v", claudeSonnet.Usages)
+	}
+
+	codex, ok := byKey["codex/chatgpt-sol"]
+	if !ok {
+		t.Fatalf("missing codex/chatgpt-sol group: %+v", workers)
+	}
+	if len(codex.Usages) != 1 || codex.Usages[0].Workflow != "wf-b" || codex.Usages[0].Role != "coder" {
+		t.Errorf("codex/chatgpt-sol usages = %+v, want exactly wf-b's coder", codex.Usages)
+	}
+}
+
+func TestAggregateWorkersEmptyInput(t *testing.T) {
+	if workers := aggregateWorkers(nil); len(workers) != 0 {
+		t.Errorf("aggregateWorkers(nil) = %v, want empty", workers)
+	}
+}
+
+func TestListWorkersHandlerReflectsRealWorkflowFiles(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/workers", nil)
+	rec := httptest.NewRecorder()
+	listWorkersHandler("../../workflows")(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var workers []WorkerInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &workers); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	found := false
+	for _, w := range workers {
+		if w.Harness == "claude-code" && w.Model == "sonnet" {
+			found = true
+			if len(w.Usages) != 3 {
+				t.Errorf("claude-code/sonnet usages = %v, want 3 (planner/coder/reviewer from issue-to-pr-claude-only)", w.Usages)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a claude-code/sonnet worker group, got %+v", workers)
+	}
+}
+
 func TestCreateListEnableDisableRepositoryHandlers(t *testing.T) {
 	pool := requirePool(t)
 	name := "test-controlplane-" + time.Now().Format("20060102T150405.000000000")
