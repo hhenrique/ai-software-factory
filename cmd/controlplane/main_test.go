@@ -145,6 +145,115 @@ func TestLoadWorkflowInfoValidFile(t *testing.T) {
 	}
 }
 
+func TestBuildWorkflowGraphIncludesTerminalNodesAndSortedEdges(t *testing.T) {
+	def := workflowdef.Definition{
+		Workflow: "graph-test", Version: 1,
+		Steps: []workflowdef.Step{
+			{
+				ID: "plan", Type: workflowdef.StepTypeAgent, Role: "planner",
+				OutputSchema: map[string]any{"verdict": []any{"proceed", "reject"}},
+				On: map[string]workflowdef.Target{
+					"proceed": {StepOrState: "execute"},
+					"reject":  {StepOrState: "FAILED"},
+				},
+				OnMalformedOutput: "REVIEW_PENDING",
+			},
+			{ID: "execute", Type: workflowdef.StepTypeTool, Action: "run.tests_lint_build", Next: "COMPLETED"},
+		},
+	}
+
+	g := buildWorkflowGraph(&def, "workflows/graph-test.yaml")
+	if g.Workflow != "graph-test" || g.Path != "workflows/graph-test.yaml" {
+		t.Errorf("Workflow/Path = %q/%q", g.Workflow, g.Path)
+	}
+
+	var nodeIDs []string
+	for _, n := range g.Nodes {
+		nodeIDs = append(nodeIDs, n.ID)
+	}
+	for _, want := range []string{"plan", "execute", "FAILED", "REVIEW_PENDING", "COMPLETED"} {
+		found := false
+		for _, id := range nodeIDs {
+			if id == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("Nodes missing %q: %v", want, nodeIDs)
+		}
+	}
+
+	// Exactly one terminal node per distinct terminal state reached, even
+	// though FAILED/REVIEW_PENDING/COMPLETED are each referenced once here
+	// — this asserts de-duplication, which matters more once two steps
+	// route to the same terminal.
+	terminalCount := 0
+	for _, n := range g.Nodes {
+		if n.Kind == "terminal" {
+			terminalCount++
+		}
+	}
+	if terminalCount != 3 {
+		t.Errorf("terminal node count = %d, want 3", terminalCount)
+	}
+
+	if len(g.Edges) != 4 {
+		t.Fatalf("len(Edges) = %d, want 4 (proceed, reject, malformed_output, execute->COMPLETED): %+v", len(g.Edges), g.Edges)
+	}
+	// Sorted by (From, Label): execute's unlabeled edge sorts before any
+	// of plan's labeled edges for the same From, and "malformed_output" <
+	// "proceed" < "reject" alphabetically.
+	if g.Edges[0].From != "execute" || g.Edges[0].To != "COMPLETED" || g.Edges[0].Label != "" {
+		t.Errorf("Edges[0] = %+v", g.Edges[0])
+	}
+	if g.Edges[1].From != "plan" || g.Edges[1].Label != "malformed_output" || g.Edges[1].To != "REVIEW_PENDING" {
+		t.Errorf("Edges[1] = %+v", g.Edges[1])
+	}
+	if g.Edges[2].From != "plan" || g.Edges[2].Label != "proceed" || g.Edges[2].To != "execute" {
+		t.Errorf("Edges[2] = %+v", g.Edges[2])
+	}
+	if g.Edges[3].From != "plan" || g.Edges[3].Label != "reject" || g.Edges[3].To != "FAILED" {
+		t.Errorf("Edges[3] = %+v", g.Edges[3])
+	}
+}
+
+func TestWorkflowGraphHandlerRealFile(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/workflow-graph?path=../../workflows/issue-to-pr-claude-only.yaml", nil)
+	rec := httptest.NewRecorder()
+	workflowGraphHandler("../../workflows")(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var g WorkflowGraph
+	if err := json.Unmarshal(rec.Body.Bytes(), &g); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if g.Workflow != "issue-to-pr-claude-only" {
+		t.Errorf("Workflow = %q", g.Workflow)
+	}
+	if len(g.Nodes) == 0 || len(g.Edges) == 0 {
+		t.Errorf("expected non-empty Nodes/Edges, got %d/%d", len(g.Nodes), len(g.Edges))
+	}
+}
+
+func TestWorkflowGraphHandlerRejectsPathOutsideWorkflowsDir(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/workflow-graph?path=../../go.mod", nil)
+	rec := httptest.NewRecorder()
+	workflowGraphHandler("../../workflows")(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (path traversal must be rejected)", rec.Code)
+	}
+}
+
+func TestWorkflowGraphHandlerMissingPathParam(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/workflow-graph", nil)
+	rec := httptest.NewRecorder()
+	workflowGraphHandler("../../workflows")(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
 func TestLoadWorkflowInfoMissingFile(t *testing.T) {
 	info := loadWorkflowInfo("../../workflows/does-not-exist.yaml")
 	if info.Valid {
