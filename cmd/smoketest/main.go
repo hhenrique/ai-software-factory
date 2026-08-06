@@ -50,7 +50,7 @@ func scenarios() []scenario {
 			workflowID:             "smoketest-happy-path",
 			failVerifyUntilAttempt: 0,
 			wantFinalState:         "COMPLETED",
-			wantStepsVisited:       []string{"provision", "execute", "verify", "merge"},
+			wantStepsVisited:       []string{"provision", "execute", "verify", "create_pr"},
 			wantVerifyRoundsSpent:  1,
 		},
 		{
@@ -58,7 +58,7 @@ func scenarios() []scenario {
 			workflowID:             "smoketest-loop-then-pass",
 			failVerifyUntilAttempt: 1,
 			wantFinalState:         "COMPLETED",
-			wantStepsVisited:       []string{"provision", "execute", "verify", "revise_verify", "verify", "merge"},
+			wantStepsVisited:       []string{"provision", "execute", "verify", "revise_verify", "verify", "create_pr"},
 			wantVerifyRoundsSpent:  2,
 		},
 		{

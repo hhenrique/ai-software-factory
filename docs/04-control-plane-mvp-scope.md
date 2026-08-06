@@ -66,7 +66,7 @@ Per-repo configuration, minimum required fields:
   classification and by PLANNING's scope contract defaults)
 - Default Workflow (which Workflow a Task against this repo uses absent
   an override)
-- Branching policy reference (how MERGING should behave — direct to
+- Branching policy reference (how CREATE_PR should behave — direct to
   trunk, PR-required, etc.)
 
 Explicitly deferred: per-repo custom indexing/RAG configuration as a

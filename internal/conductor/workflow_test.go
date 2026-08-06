@@ -87,7 +87,7 @@ func TestRunWorkflowHappyPath(t *testing.T) {
 	require.NoError(t, env.GetWorkflowResult(&result))
 
 	require.Equal(t, "COMPLETED", result.FinalState)
-	require.Equal(t, []string{"provision", "execute", "verify", "merge"}, result.StepsVisited)
+	require.Equal(t, []string{"provision", "execute", "verify", "create_pr"}, result.StepsVisited)
 	require.Equal(t, 1, result.BudgetSpent["verify_rounds"])
 	env.AssertExpectations(t)
 }
@@ -110,7 +110,7 @@ func TestRunWorkflowRecordsTransitionEvents(t *testing.T) {
 		Return(func(ctx context.Context, ev conductor.TransitionEvent) error {
 			events = append(events, ev)
 			return nil
-		}).Times(5) // start + provision->execute->verify->merge->COMPLETED
+		}).Times(5) // start + provision->execute->verify->create_pr->COMPLETED
 
 	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{Definition: def})
 
@@ -131,9 +131,9 @@ func TestRunWorkflowRecordsTransitionEvents(t *testing.T) {
 	require.Equal(t, 1, events[2].ActivityCalls)
 
 	require.Equal(t, "verify", events[3].FromStep)
-	require.Equal(t, "merge", events[3].ToStep)
+	require.Equal(t, "create_pr", events[3].ToStep)
 
-	require.Equal(t, "merge", events[4].FromStep)
+	require.Equal(t, "create_pr", events[4].FromStep)
 	require.Equal(t, "COMPLETED", events[4].ToStep)
 
 	env.AssertExpectations(t)
@@ -254,7 +254,7 @@ func TestRunWorkflowLoopThenPass(t *testing.T) {
 
 	require.Equal(t, "COMPLETED", result.FinalState)
 	require.Equal(t,
-		[]string{"provision", "execute", "verify", "revise_verify", "verify", "merge"},
+		[]string{"provision", "execute", "verify", "revise_verify", "verify", "create_pr"},
 		result.StepsVisited)
 	require.Equal(t, 2, result.BudgetSpent["verify_rounds"])
 	env.AssertExpectations(t)

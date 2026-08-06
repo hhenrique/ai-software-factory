@@ -157,7 +157,7 @@ steps:
     budget: review_rounds
     output_schema: { findings: array }
     on:
-      approved: merge
+      approved:         create_pr
       changes_required: coder_response
       budget_exhausted: REVIEW_PENDING
 
@@ -177,7 +177,7 @@ steps:
     role: coder
     next: verify
 
-  - id: merge
+  - id: create_pr
     type: tool
     action: pr.create_and_link
     next: COMPLETED
@@ -214,7 +214,7 @@ steps:
     action: run.tests_lint_build
     budget: verify_rounds
     on:
-      pass: merge
+      pass: create_pr
       fail: revise_verify
       budget_exhausted: FAILED
 
@@ -224,7 +224,7 @@ steps:
     context: [failing_tests_diff]
     next: verify
 
-  - id: merge
+  - id: create_pr
     type: tool
     action: pr.create_and_link
     next: COMPLETED

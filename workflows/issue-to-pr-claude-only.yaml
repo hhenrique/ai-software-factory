@@ -65,7 +65,7 @@ steps:
     budget: review_rounds
     output_schema: { findings: array, verdict: [approved, changes_required] }
     on:
-      approved: merge
+      approved:         create_pr
       changes_required: coder_response
       budget_exhausted: REVIEW_PENDING
     on_malformed_output: REVIEW_PENDING
@@ -88,7 +88,7 @@ steps:
     context: [scope_contract, worktree_path]
     next: verify
 
-  - id: merge
+  - id: create_pr
     type: tool
     action: pr.create_and_link
     next: COMPLETED

@@ -75,7 +75,7 @@ Temporal primitive — keep this distinction in code and docs (see
 ### Run state machine (`docs/01-run-state-machine.md`)
 
 States: `QUEUED → PROVISIONING → PLANNING → EXECUTING ↔ VERIFYING →
-REVIEWING ↔ REVISING → REVIEW_PENDING → MERGING → COMPLETED`, with `FAILED`,
+REVIEWING ↔ REVISING → REVIEW_PENDING → CREATE_PR → COMPLETED`, with `FAILED`,
 `CANCELLED`, `BLOCKED` as terminal/terminal-adjacent states. Every state is
 owned by exactly one of **tool**, **agent**, or **human** — this ownership
 must be visible in the Workflow Definition (`type: tool | agent` per step)

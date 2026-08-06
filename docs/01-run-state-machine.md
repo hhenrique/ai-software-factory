@@ -10,7 +10,7 @@ Consumed by: 02-workflow-definition-schema.md (steps map onto these states),
 Defines the states, transitions, ownership (tool vs. agent), and budget
 rules for a single Run. This is the state machine for the reference
 "standard" Workflow (roughly: plan → implement → verify → review →
-merge). Simpler Workflows (e.g. a dependency bump) use a subset of these
+create PR). Simpler Workflows (e.g. a dependency bump) use a subset of these
 states — see 02-workflow-definition-schema.md for how a Workflow
 declares which steps it actually uses.
 
@@ -40,7 +40,7 @@ be audited against Rule 2.
 | REVIEWING | agent (Reviewer) | assess diff against scope contract |
 | REVISING (review) | agent (Coder) | address / dispute / escalate / mark out-of-scope a finding |
 | REVIEW_PENDING | human | a gate: human decision required |
-| MERGING | tool | PR creation/update, CI trigger, rebase if needed |
+| CREATE_PR | tool | PR creation/update, CI trigger, rebase if needed |
 | COMPLETED | tool | terminal, success |
 | FAILED | tool | terminal, unsuccessful |
 | CANCELLED | tool | terminal, human/policy triggered |
@@ -141,7 +141,7 @@ Roles: Coder and Reviewer are distinct Roles (harness + model pairs),
 independently configured — see 03-roles-and-harness-contract.md.
 
 ```
-REVIEWING(Reviewer) ─┬─→ REVIEW_PENDING → MERGING     (approved)
+REVIEWING(Reviewer) ─┬─→ REVIEW_PENDING → CREATE_PR   (approved)
                       ├─→ REVISING(review)(Coder) → VERIFYING → REVIEWING   (changes required, budget remains)
                       └─→ FAILED / REVIEW_PENDING      (budget exhausted, unresolved)
 ```
@@ -260,7 +260,7 @@ senior developer. The state machine's job is only to recognize *when*
 this trigger fires (cap reached, or deadlock detected) and hand the
 human the finding plus both sides' reasoning — it does not adjudicate.
 
-## MERGING
+## CREATE_PR
 
 Tool-owned: PR creation, linking to the source Task, applying labels,
 triggering CI, rebasing if the branching policy requires it. No agent

@@ -1,4 +1,4 @@
-// Package pr holds the real pr.create_and_link Activity — MERGING is
+// Package pr holds the real pr.create_and_link Activity — CREATE_PR is
 // fully tool-owned (doc 01): push the Run's branch and open a PR. No
 // agent involvement.
 package pr
@@ -33,7 +33,7 @@ func (a *Activities) Registrations() map[string]any {
 }
 
 // CreateAndLink pushes the Run's worktree branch and opens a PR for it.
-// "linking to the source Task" (doc 01's MERGING description) is not yet
+// "linking to the source Task" (doc 01's CREATE_PR description) is not yet
 // possible — there's no persisted Task entity to link to (doc 04's Work
 // section is unbuilt) — so this only does the push+PR half for now.
 //

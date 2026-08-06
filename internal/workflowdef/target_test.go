@@ -42,7 +42,7 @@ id: review
 type: agent
 role: reviewer
 on:
-  approved: merge
+  approved: create_pr
   out_of_scope:
     action: task.create(source=review-finding)
     next: review
@@ -51,8 +51,8 @@ on:
 	if err := yaml.Unmarshal([]byte(yamlDoc), &s); err != nil {
 		t.Fatalf("unmarshal step: %v", err)
 	}
-	if got := s.On["approved"].Destination(); got != "merge" {
-		t.Errorf("on[approved].Destination() = %q, want %q", got, "merge")
+	if got := s.On["approved"].Destination(); got != "create_pr" {
+		t.Errorf("on[approved].Destination() = %q, want %q", got, "create_pr")
 	}
 	oos := s.On["out_of_scope"]
 	if !oos.HasSideEffect() || oos.Destination() != "review" {

@@ -61,7 +61,7 @@ func TestRecordEventMultipleTransitionsOrderByOccurredAt(t *testing.T) {
 	ctx := context.Background()
 
 	runID := "test-run-multi-" + time.Now().Format(time.RFC3339Nano)
-	steps := []string{"provision", "execute", "verify", "merge"}
+	steps := []string{"provision", "execute", "verify", "create_pr"}
 	from := ""
 	for _, to := range steps {
 		if err := a.RecordEvent(ctx, conductor.TransitionEvent{
@@ -79,7 +79,7 @@ func TestRecordEventMultipleTransitionsOrderByOccurredAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("query back: %v", err)
 	}
-	if lastToStep != "merge" {
-		t.Errorf("most recent to_step = %q, want %q", lastToStep, "merge")
+	if lastToStep != "create_pr" {
+		t.Errorf("most recent to_step = %q, want %q", lastToStep, "create_pr")
 	}
 }
