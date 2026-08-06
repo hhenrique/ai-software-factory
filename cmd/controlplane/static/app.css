@@ -505,3 +505,100 @@ button.link:hover {
 .cy-cluster-parent {
   background-opacity: 0.06;
 }
+
+/* ---- workflow_v4: BPMN-styled swimlane ---- */
+
+:root {
+  --color-lane-alt: rgba(255, 255, 255, 0.025);
+  --color-gateway: #d68a3a;
+  --color-boundary: #d6493a;
+}
+
+.v4-lane-band { fill: transparent; }
+.v4-lane-band.alt { fill: var(--color-lane-alt); }
+.v4-lane-rule { stroke: var(--color-border); stroke-width: 1; }
+.v4-lane-label {
+  fill: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.v4-subprocess {
+  fill: var(--color-cluster-fill);
+  stroke: var(--color-cluster-ring);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+.v4-subprocess-label {
+  fill: var(--color-cluster-ring);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.v4-task-shape {
+  fill: var(--color-surface-raised);
+  stroke: var(--color-border);
+  stroke-width: 1.5;
+}
+.v4-node.kind-tool .v4-task-shape { stroke: var(--color-node-tool); }
+.v4-node.kind-agent .v4-task-shape { stroke: var(--color-node-agent); }
+.v4-node text {
+  fill: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  pointer-events: none;
+}
+.v4-task-sub { fill: var(--color-text-muted); font-size: 10px; }
+.v4-task-icon { fill: var(--color-text-muted); font-size: 11px; }
+
+.v4-gateway-shape {
+  fill: var(--color-surface-raised);
+  stroke: var(--color-gateway);
+  stroke-width: 1.5;
+}
+.v4-gateway-x {
+  stroke: var(--color-gateway);
+  stroke-width: 1.5;
+  fill: none;
+}
+
+.v4-event-outer {
+  fill: var(--color-bg);
+  stroke: var(--color-node-terminal);
+  stroke-width: 2;
+}
+.v4-shape-intermediate .v4-event-outer { stroke: var(--color-cluster-ring); }
+.v4-event-inner-ring {
+  fill: none;
+  stroke: var(--color-cluster-ring);
+  stroke-width: 1.2;
+}
+.v4-event-fill { fill: var(--color-node-terminal); }
+.v4-event-error-bolt { fill: var(--color-boundary); }
+.v4-event-label {
+  fill: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  pointer-events: none;
+}
+
+.v4-boundary-outer { fill: var(--color-bg); stroke: var(--color-boundary); stroke-width: 1.5; }
+.v4-boundary-inner { fill: none; stroke: var(--color-boundary); stroke-width: 1; }
+
+.v4-edge {
+  fill: none;
+  stroke: var(--color-edge);
+  stroke-width: 1.5;
+}
+.v4-edge-boundary {
+  stroke: var(--color-boundary);
+  stroke-dasharray: 4 3;
+}
+.v4-edge-label {
+  fill: var(--color-edge-label);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.v4-edge-label-boundary { fill: var(--color-boundary); }

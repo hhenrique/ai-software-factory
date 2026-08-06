@@ -367,6 +367,12 @@ doc will be updated once a direction is picked, at which point every
 other layout option should come back out rather than linger as dead
 nav entries.
 
+Two more prototypes (`workflow_v4`: hand-rolled BPMN-styled; `workflow_v5`:
+real `bpmn-auto-layout` + `bpmn-js` toolchain) explored BPMN as a notation
+rather than a further node-link layout — see
+06-workflow-visualizations.md for that spike's full findings and current
+paused status.
+
 ### Workers (Roles)
 
 - List of configured roles (name, harness, model/endpoint)

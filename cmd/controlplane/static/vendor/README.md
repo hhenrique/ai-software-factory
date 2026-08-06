@@ -33,3 +33,31 @@ Definition's back/forth loops properly rather than approximating it
 To upgrade: re-download from the same unpkg URL with a newer major
 version pinned, verify the visualization pages still render, update the
 version in the filename and this table.
+
+## bpmn-js / bpmn-auto-layout (workflow_v5)
+
+Used only by the workflow_v5 prototype — a real-toolchain comparison
+against workflow_v4's hand-rolled BPMN-styled renderer, requested directly
+to answer "how much are we losing by not adopting the actual BPMN
+toolchain." Unlike everything above, `bpmn-auto-layout` doesn't ship a
+pre-built browser bundle (it's ESM-only and imports `bpmn-moddle` /
+`min-dash` as bare specifiers, which a plain `<script>` tag can't resolve
+without an import map or bundler) — its file here was built locally rather
+than downloaded as-is.
+
+| File | Source | Version |
+|---|---|---|
+| `bpmn-js.v18.navigated-viewer.min.js` | https://unpkg.com/bpmn-js@18.22.1/dist/bpmn-navigated-viewer.production.min.js (pre-packaged UMD, `window.BpmnJS`) | 18.22.1 |
+| `bpmn-js.v18.css` | `bpmn-js`'s own `dist/assets/bpmn-js.css` | 18.22.1 |
+| `diagram-js.v18.css` | `bpmn-js`'s own `dist/assets/diagram-js.css` | 18.22.1 |
+| `bpmn-embedded-font.v18.css` | `bpmn-js`'s own `dist/assets/bpmn-font/css/bpmn-embedded.css` — the icon font as self-contained base64 `@font-face`, so no separate `.woff`/`.ttf` files need vendoring alongside it | 18.22.1 |
+| `bpmn-auto-layout.v1.bundle.js` | `bpmn-auto-layout@1.3.0`'s `dist/index.js`, bundled locally: `esbuild dist/index.js --bundle --format=iife --global-name=BpmnAutoLayout --platform=browser` (exposes `window.BpmnAutoLayout.layoutProcess`) | 1.3.0 |
+
+**License note (`bpmn-js`, MIT-based but not plain MIT):** the license adds
+one binding condition — the bpmn.io watermark link that `bpmn-js` renders
+into the diagram itself must stay visible and not be covered by other
+elements. Don't add CSS/z-index tricks that hide it.
+
+To rebuild `bpmn-auto-layout.v1.bundle.js` after a version bump: `npm
+install bpmn-auto-layout@<version> esbuild`, then run the `esbuild`
+command above against the installed package's `dist/index.js`.

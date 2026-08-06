@@ -14,6 +14,8 @@ const VIEWS = {
   workflow_v1: { label: "Workflow (v1: vanilla SVG)", render: renderWorkflowV1 },
   workflow_v2: { label: "Workflow (v2: D3 + dagre)", render: renderWorkflowV2 },
   workflow_v3: { label: "Workflow (v3: Cytoscape.js)", render: renderWorkflowV3 },
+  workflow_v4: { label: "Workflow (v4: BPMN-styled)", render: renderWorkflowV4 },
+  workflow_v5: { label: "Workflow (v5: bpmn-js + auto-layout)", render: renderWorkflowV5 },
 };
 
 const DEFAULT_VIEW = "repositories";
