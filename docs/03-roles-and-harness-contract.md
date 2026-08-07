@@ -4,7 +4,8 @@ Status: decided
 Depends on: 00-vision-and-principles.md
 Consumed by: 02-workflow-definition-schema.md (`roles:` list),
 05-architecture-temporal.md (adapter boundary), 04-control-plane-mvp-scope.md
-(Workers section: internal/workers, internal/roleassignment)
+(Workers section: internal/workers, internal/roleassignment),
+08-tracking-integration.md (mirrors each role's structured output)
 
 ## Definitions
 
@@ -170,8 +171,10 @@ not for routing. Framing, not a finalized schema:
 This is additive to the routing schemas above, not a replacement — a
 harness adapter would populate both from the same call, same as today's
 `findings`/`verdict` split for the Reviewer. Deferred until the tracking
-mirror itself (01-run-state-machine.md) gets built, since there's no
-external surface yet for this content to land on.
+mirror itself (08-tracking-integration.md, design decided, not yet
+built) actually exists to consume it — that doc's v1 content uses only
+the routing schemas already defined above; this narrative-content
+schema is its explicitly separable v2.
 
 ## Adding a new harness
 

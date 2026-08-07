@@ -3,7 +3,8 @@
 Status: decided (v1 shape for the "issue-to-PR, non-trivial change" case)
 Depends on: 00-vision-and-principles.md
 Consumed by: 02-workflow-definition-schema.md (steps map onto these states),
-05-architecture-temporal.md (states map onto Temporal activities/signals)
+05-architecture-temporal.md (states map onto Temporal activities/signals),
+08-tracking-integration.md (mirrors the events recorded here)
 
 ## Scope of this document
 
@@ -275,16 +276,17 @@ fail before any model call — this is the raw feed for Overview
 aggregation (time-to-green, cost-per-Run, agent-step token ratio; see
 04-control-plane-mvp-scope.md).
 
-**Near future, not built yet:** every state transition should also be
-mirrored into whatever tool the Task's source integrates with — e.g. a
-comment on the originating GitHub issue/PR — not just the internal
-projection store. The projection store remains the source of truth (it's
-what Overview aggregates from and what a Run's trace/replay is built on);
-the external mirror is for a human tracking the work from wherever they
-already live, not a second store. See 03-roles-and-harness-contract.md's
-matching note on what each role's recorded content should actually
-contain, since "record every transition" and "record something worth
-reading" are different bars.
+Every state transition should also be mirrored into whatever tool the
+Task's source integrates with — e.g. a comment on the originating GitHub
+issue/PR — not just the internal projection store. The projection store
+remains the source of truth (it's what Overview aggregates from and what
+a Run's trace/replay is built on); the external mirror is for a human
+tracking the work from wherever they already live, not a second store.
+Design decided in 08-tracking-integration.md (adapter shape, where this
+hooks into the conductor, content, failure semantics) — not yet built.
+See 03-roles-and-harness-contract.md's matching note on what each role's
+recorded content should actually contain, since "record every
+transition" and "record something worth reading" are different bars.
 
 ## Resuming or cancelling a REVIEW_PENDING Run
 
