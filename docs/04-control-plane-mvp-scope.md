@@ -375,7 +375,7 @@ rather than a further node-link layout — see
 06-workflow-visualizations.md for that spike's full findings and current
 paused status.
 
-### Workers (Roles)
+### Workers
 
 - List of configured Workers (name, harness, model/params), CRUD
 - Which (Workflow, role) pairs currently play each Worker (blast radius

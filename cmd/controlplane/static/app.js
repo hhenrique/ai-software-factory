@@ -9,7 +9,7 @@ const VIEWS = {
   repositories: { label: "Repositories", render: renderRepositories },
   workflows: { label: "Workflows", render: renderWorkflows },
   workers: { label: "Workers", render: renderWorkers },
-  work: { label: "Work", render: renderWork },
+  tasks: { label: "Tasks", render: renderTasks },
   inbox: { label: "Inbox", render: renderInbox },
   workflow_v1: { label: "Workflow (v1: vanilla SVG)", render: renderWorkflowV1 },
   workflow_v2: { label: "Workflow (v2: D3 + dagre)", render: renderWorkflowV2 },
@@ -980,9 +980,9 @@ function renderWorkers(container) {
   refresh();
 }
 
-// ---- work (task) view ----
+// ---- tasks view ----
 
-function renderWork(container) {
+function renderTasks(container) {
   const wrap = document.createElement("div");
 
   const errorBanner = document.createElement("div");
@@ -1241,7 +1241,7 @@ function renderInbox(container) {
   listCard.className = "card";
   const header = document.createElement("div");
   header.className = "card-header";
-  header.innerHTML = `<h2 id="inbox-count">Pending review</h2>`;
+  header.innerHTML = `<h2 id="inbox-count">Inbox</h2>`;
   listCard.appendChild(header);
   const list = document.createElement("div");
   list.className = "list";
@@ -1281,7 +1281,7 @@ function renderInbox(container) {
   }
 
   function renderList(pending) {
-    document.getElementById("inbox-count").textContent = `Pending review — ${pending.length}`;
+    document.getElementById("inbox-count").textContent = `Inbox — ${pending.length} pending`;
 
     list.innerHTML = "";
     if (pending.length === 0) {
