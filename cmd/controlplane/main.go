@@ -31,8 +31,10 @@ import (
 	"factory/internal/eventlog"
 	"factory/internal/harnesslimits"
 	"factory/internal/inbox"
+	"factory/internal/repoconfig"
 	"factory/internal/repositories"
 	"factory/internal/roleassignment"
+	"factory/internal/settings"
 	"factory/internal/taskintake"
 	"factory/internal/temporalconn"
 	"factory/internal/workers"
@@ -111,6 +113,8 @@ func main() {
 	mux.HandleFunc("GET /api/role-assignments", listRoleAssignmentsHandler(pool))
 	mux.HandleFunc("POST /api/role-assignments", setRoleAssignmentHandler(d.workflowsDir, pool))
 	mux.HandleFunc("POST /api/role-assignments/delete", deleteRoleAssignmentHandler(pool))
+	mux.HandleFunc("GET /api/settings", listSettingsHandler(pool))
+	mux.HandleFunc("POST /api/settings", setSettingHandler(pool))
 	mux.HandleFunc("GET /api/tasks", listTasksHandler(d))
 	mux.HandleFunc("POST /api/tasks", createTaskHandler(d))
 	mux.HandleFunc("GET /api/inbox", listInboxHandler(d))
@@ -750,6 +754,7 @@ type createRepositoryRequest struct {
 	Identity        string `json:"identity"`
 	TestCommand     string `json:"test_command"`
 	DefaultWorkflow string `json:"default_workflow"`
+	WorktreeRoot    string `json:"worktree_root"`
 }
 
 func createRepositoryHandler(pool *pgxpool.Pool) http.HandlerFunc {
@@ -765,8 +770,16 @@ func createRepositoryHandler(pool *pgxpool.Pool) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		// Empty is fine (inherit the global default); non-empty gets the
+		// same validation as the Settings view's factory_root, same reason.
+		if req.WorktreeRoot != "" {
+			if err := repoconfig.ValidateRoot(req.WorktreeRoot); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 
-		repo, err := repositories.Insert(r.Context(), pool, name, cloneURL, req.TestCommand, req.DefaultWorkflow)
+		repo, err := repositories.Insert(r.Context(), pool, name, cloneURL, req.TestCommand, req.DefaultWorkflow, req.WorktreeRoot)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -809,6 +822,7 @@ type updateRepositoryRequest struct {
 	Name            string `json:"name"`
 	TestCommand     string `json:"test_command"`
 	DefaultWorkflow string `json:"default_workflow"`
+	WorktreeRoot    string `json:"worktree_root"`
 }
 
 func updateRepositoryHandler(pool *pgxpool.Pool) http.HandlerFunc {
@@ -818,7 +832,13 @@ func updateRepositoryHandler(pool *pgxpool.Pool) http.HandlerFunc {
 			http.Error(w, "malformed JSON body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		repo, err := repositories.Update(r.Context(), pool, req.Name, req.TestCommand, req.DefaultWorkflow)
+		if req.WorktreeRoot != "" {
+			if err := repoconfig.ValidateRoot(req.WorktreeRoot); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		repo, err := repositories.Update(r.Context(), pool, req.Name, req.TestCommand, req.DefaultWorkflow, req.WorktreeRoot)
 		if errors.Is(err, repositories.ErrNotFound) {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -848,6 +868,57 @@ func deleteRepositoryHandler(pool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// listSettingsHandler returns every configured global setting — small,
+// whole-table data, same convention as GET /api/workflows and
+// GET /api/workers.
+func listSettingsHandler(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		all, err := settings.List(r.Context(), pool)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, all)
+	}
+}
+
+// setSettingRequest is /api/settings' POST body.
+type setSettingRequest struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+func setSettingHandler(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req setSettingRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "malformed JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Key == "" {
+			http.Error(w, "key is required", http.StatusBadRequest)
+			return
+		}
+		// factory_root specifically gets validated before being persisted
+		// — an accepted-but-wrong root (doesn't exist, isn't writable) is
+		// exactly the earlier failure mode (silent until a Run failed deep
+		// inside a mkdir) moved from an env var to this form instead of
+		// actually fixed. Other keys have no path semantics to validate.
+		if req.Key == repoconfig.FactoryRootKey {
+			if err := repoconfig.ValidateRoot(req.Value); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		s, err := settings.Set(r.Context(), pool, req.Key, req.Value)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, s)
 	}
 }
 

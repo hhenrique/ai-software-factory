@@ -16,11 +16,11 @@ import (
 // each test gets an isolated clone/worktree tree.
 type testProvider struct{ root string }
 
-func (p testProvider) Paths(repo, runID string) repoconfig.Paths {
+func (p testProvider) Paths(ctx context.Context, repo, runID string) (repoconfig.Paths, error) {
 	return repoconfig.Paths{
 		CloneDir:    filepath.Join(p.root, "repos", repo+".git"),
 		WorktreeDir: filepath.Join(p.root, "worktrees", repo, runID),
-	}
+	}, nil
 }
 
 func requireGit(t *testing.T) {

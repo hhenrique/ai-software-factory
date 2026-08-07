@@ -41,7 +41,7 @@ func TestInsertThenGet(t *testing.T) {
 	ctx := context.Background()
 	name := uniqueName(t)
 
-	inserted, err := Insert(ctx, pool, name, "https://github.com/hhenrique/toy-repo.git", "node --check script.js", "workflows/issue-to-pr-claude-only.yaml")
+	inserted, err := Insert(ctx, pool, name, "https://github.com/hhenrique/toy-repo.git", "node --check script.js", "workflows/issue-to-pr-claude-only.yaml", "")
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
@@ -74,10 +74,10 @@ func TestInsertDuplicateNameErrors(t *testing.T) {
 	ctx := context.Background()
 	name := uniqueName(t)
 
-	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "", ""); err != nil {
+	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "", "", ""); err != nil {
 		t.Fatalf("first Insert: %v", err)
 	}
-	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "", ""); err == nil {
+	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "", "", ""); err == nil {
 		t.Fatalf("expected an error registering a duplicate name")
 	}
 }
@@ -87,7 +87,7 @@ func TestSetEnabledTogglesAndErrorsOnUnknownName(t *testing.T) {
 	ctx := context.Background()
 	name := uniqueName(t)
 
-	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "", ""); err != nil {
+	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "", "", ""); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
@@ -112,7 +112,7 @@ func TestListIncludesInsertedRepository(t *testing.T) {
 	ctx := context.Background()
 	name := uniqueName(t)
 
-	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "", ""); err != nil {
+	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "", "", ""); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
@@ -136,19 +136,49 @@ func TestUpdateChangesTestCommandAndWorkflowNotNameOrCloneURL(t *testing.T) {
 	ctx := context.Background()
 	name := uniqueName(t)
 
-	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "old command", "old.yaml"); err != nil {
+	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "old command", "old.yaml", "/old/root"); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	updated, err := Update(ctx, pool, name, "new command", "new.yaml")
+	updated, err := Update(ctx, pool, name, "new command", "new.yaml", "/new/root")
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if updated.TestCommand != "new command" || updated.DefaultWorkflow != "new.yaml" {
-		t.Errorf("Update = %+v, want new command/new.yaml", updated)
+	if updated.TestCommand != "new command" || updated.DefaultWorkflow != "new.yaml" || updated.WorktreeRoot != "/new/root" {
+		t.Errorf("Update = %+v, want new command/new.yaml//new/root", updated)
 	}
 	if updated.Name != name || updated.CloneURL != "https://github.com/a/b.git" {
 		t.Errorf("Update changed name/clone_url: %+v", updated)
+	}
+}
+
+func TestInsertAndUpdateRoundTripWorktreeRoot(t *testing.T) {
+	pool := requirePool(t)
+	ctx := context.Background()
+	name := uniqueName(t)
+
+	inserted, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "", "", "/data/factory")
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if inserted.WorktreeRoot != "/data/factory" {
+		t.Errorf("Insert: WorktreeRoot = %q, want /data/factory", inserted.WorktreeRoot)
+	}
+
+	got, err := Get(ctx, pool, name)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.WorktreeRoot != "/data/factory" {
+		t.Errorf("Get: WorktreeRoot = %q, want /data/factory", got.WorktreeRoot)
+	}
+
+	updated, err := Update(ctx, pool, name, "", "", "")
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if updated.WorktreeRoot != "" {
+		t.Errorf("Update: WorktreeRoot = %q, want empty (cleared)", updated.WorktreeRoot)
 	}
 }
 
@@ -156,7 +186,7 @@ func TestUpdateUnknownNameReturnsErrNotFound(t *testing.T) {
 	pool := requirePool(t)
 	ctx := context.Background()
 
-	_, err := Update(ctx, pool, "does-not-exist-"+time.Now().Format(time.RFC3339Nano), "cmd", "wf.yaml")
+	_, err := Update(ctx, pool, "does-not-exist-"+time.Now().Format(time.RFC3339Nano), "cmd", "wf.yaml", "")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Update: err = %v, want ErrNotFound", err)
 	}
@@ -167,7 +197,7 @@ func TestDeleteThenGetReturnsErrNotFound(t *testing.T) {
 	ctx := context.Background()
 	name := uniqueName(t)
 
-	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "", ""); err != nil {
+	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "", "", ""); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 	if err := Delete(ctx, pool, name); err != nil {

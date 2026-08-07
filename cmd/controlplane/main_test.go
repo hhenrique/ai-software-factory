@@ -532,7 +532,7 @@ func TestCreateAndListTaskHandlers(t *testing.T) {
 
 	repoName := "github.com/hhenrique/cp-task-test-" + time.Now().Format("20060102T150405.000000000")
 	if _, err := repositories.Insert(context.Background(), pool, repoName,
-		"https://github.com/hhenrique/toy-repo.git", "true", "../../workflows/issue-to-pr-claude-only.yaml"); err != nil {
+		"https://github.com/hhenrique/toy-repo.git", "true", "../../workflows/issue-to-pr-claude-only.yaml", ""); err != nil {
 		t.Fatalf("repositories.Insert: %v", err)
 	}
 
@@ -621,7 +621,7 @@ func TestCreateTaskHandlerDisabledRepoReturnsConflict(t *testing.T) {
 
 	repoName := "github.com/hhenrique/cp-task-disabled-" + time.Now().Format("20060102T150405.000000000")
 	if _, err := repositories.Insert(context.Background(), pool, repoName,
-		"https://github.com/hhenrique/toy-repo.git", "true", ""); err != nil {
+		"https://github.com/hhenrique/toy-repo.git", "true", "", ""); err != nil {
 		t.Fatalf("repositories.Insert: %v", err)
 	}
 	if err := repositories.SetEnabled(context.Background(), pool, repoName, false); err != nil {

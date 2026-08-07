@@ -11,6 +11,7 @@ const VIEWS = {
   workers: { label: "Workers", render: renderWorkers },
   tasks: { label: "Tasks", render: renderTasks },
   inbox: { label: "Inbox", render: renderInbox },
+  settings: { label: "Settings", render: renderSettings },
   workflow_v1: { label: "Workflow (v1: vanilla SVG)", render: renderWorkflowV1 },
   workflow_v2: { label: "Workflow (v2: D3 + dagre)", render: renderWorkflowV2 },
   workflow_v3: { label: "Workflow (v3: Cytoscape.js)", render: renderWorkflowV3 },
@@ -274,6 +275,10 @@ function renderRepositories(container) {
           <option value="">(none)</option>
         </select>
       </div>
+      <div class="field">
+        <label for="rf-worktree-root">Worktree root override</label>
+        <input id="rf-worktree-root" type="text" placeholder="optional — leave blank to use the Settings default">
+      </div>
       <button class="primary" id="rf-submit">+ Add repository</button>
     </div>
     <p class="hint">GitHub is the only managed provider in this release.</p>
@@ -351,7 +356,8 @@ function renderRepositories(container) {
     const meta = document.createElement("div");
     meta.className = "list-row-meta";
     meta.textContent = (repo.default_workflow || "no default workflow") +
-      (repo.test_command ? "  ·  " + repo.test_command : "");
+      (repo.test_command ? "  ·  " + repo.test_command : "") +
+      (repo.worktree_root ? "  ·  root: " + repo.worktree_root : "");
     main.appendChild(meta);
     row.appendChild(main);
 
@@ -438,12 +444,18 @@ function renderRepositories(container) {
         <label>Default workflow</label>
         <select class="edit-workflow"></select>
       </div>
+      <div class="field">
+        <label>Worktree root override</label>
+        <input type="text" class="edit-worktree-root" placeholder="optional — leave blank to use the Settings default">
+      </div>
     `;
     main.appendChild(editForm);
     row.appendChild(main);
 
     const testCommandInput = editForm.querySelector(".edit-test-command");
     testCommandInput.value = repo.test_command || "";
+    const worktreeRootInput = editForm.querySelector(".edit-worktree-root");
+    worktreeRootInput.value = repo.worktree_root || "";
     const workflowSelect = editForm.querySelector(".edit-workflow");
     workflowsReady.then(() => populateWorkflowSelect(workflowSelect, workflows, repo.default_workflow));
 
@@ -464,6 +476,7 @@ function renderRepositories(container) {
             name: repo.name,
             test_command: testCommandInput.value.trim(),
             default_workflow: workflowSelect.value,
+            worktree_root: worktreeRootInput.value.trim(),
           }),
         });
         await refresh();
@@ -491,6 +504,7 @@ function renderRepositories(container) {
     const identity = document.getElementById("rf-identity").value.trim();
     const testCommand = document.getElementById("rf-test-command").value.trim();
     const workflow = document.getElementById("rf-workflow").value.trim();
+    const worktreeRoot = document.getElementById("rf-worktree-root").value.trim();
     if (!identity) {
       showError(new Error("Canonical identity is required."));
       return;
@@ -505,11 +519,13 @@ function renderRepositories(container) {
           identity: identity,
           test_command: testCommand,
           default_workflow: workflow,
+          worktree_root: worktreeRoot,
         }),
       });
       document.getElementById("rf-identity").value = "";
       document.getElementById("rf-test-command").value = "";
       document.getElementById("rf-workflow").value = "";
+      document.getElementById("rf-worktree-root").value = "";
       await refresh();
     } catch (err) {
       showError(err);
@@ -1461,6 +1477,107 @@ function renderInbox(container) {
     row.appendChild(actions);
     return row;
   }
+
+  refresh();
+}
+
+// ---- settings view ----
+
+// renderSettings edits internal/settings' global key-value store. Only
+// one real field today (factory_root) — the backend is generic
+// (GET/POST /api/settings takes any key), but the UI doesn't need to be
+// generic just because the backend is; add the next field by hand
+// alongside factory_root when the next setting actually gets migrated
+// off an env var (docs/04's "Accumulating env-config surfaces" list has
+// the candidates).
+function renderSettings(container) {
+  const wrap = document.createElement("div");
+
+  const errorBanner = document.createElement("div");
+  errorBanner.className = "error-banner";
+  errorBanner.style.display = "none";
+  wrap.appendChild(errorBanner);
+
+  function showError(err) {
+    errorBanner.textContent = String(err.message || err);
+    errorBanner.style.display = "block";
+  }
+  function clearError() {
+    errorBanner.style.display = "none";
+  }
+
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `
+    <div class="card-header">
+      <h2>Settings</h2>
+    </div>
+    <div class="field-stack">
+      <div class="field">
+        <label for="settings-factory-root">Default worktree root</label>
+        <input id="settings-factory-root" type="text" placeholder="e.g. /var/lib/factory">
+      </div>
+      <button class="primary" id="settings-submit">Save</button>
+    </div>
+    <p class="hint" id="settings-status"></p>
+  `;
+  wrap.appendChild(card);
+
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = "Where a Run's git clone/worktree live on disk, unless a Repository overrides it " +
+    "(see that view's \"Worktree root override\" field). Used by every Run — an unconfigured value fails " +
+    "a Run at its first step (provision) rather than guessing a path that might not be writable.";
+  wrap.appendChild(hint);
+
+  container.appendChild(wrap);
+
+  const input = document.getElementById("settings-factory-root");
+  const status = document.getElementById("settings-status");
+  const submit = document.getElementById("settings-submit");
+
+  async function refresh() {
+    clearError();
+    let all;
+    try {
+      all = await apiRequest("/api/settings");
+    } catch (err) {
+      showError(err);
+      return;
+    }
+    const factoryRoot = (all || []).find((s) => s.key === "factory_root");
+    status.classList.remove("text-negative");
+    if (factoryRoot) {
+      input.value = factoryRoot.value;
+      status.textContent = `Currently used by every Run. Last updated ${new Date(factoryRoot.updated_at).toLocaleString()}.`;
+    } else {
+      input.value = "";
+      status.textContent = "Not configured yet — every Run without a per-repository override will fail at its first step until this is set.";
+      status.classList.add("text-negative");
+    }
+  }
+
+  submit.addEventListener("click", async () => {
+    clearError();
+    const value = input.value.trim();
+    if (!value) {
+      showError(new Error("Default worktree root cannot be empty."));
+      return;
+    }
+    submit.disabled = true;
+    try {
+      await apiRequest("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: "factory_root", value: value }),
+      });
+      await refresh();
+    } catch (err) {
+      showError(err);
+    } finally {
+      submit.disabled = false;
+    }
+  });
 
   refresh();
 }

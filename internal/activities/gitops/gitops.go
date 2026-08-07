@@ -67,7 +67,10 @@ func (a *Activities) WorktreeCreate(ctx context.Context, in conductor.ActivityIn
 		return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: RunID is empty")
 	}
 
-	paths := a.Paths.Paths(in.Repo.Name, in.RunID)
+	paths, err := a.Paths.Paths(ctx, in.Repo.Name, in.RunID)
+	if err != nil {
+		return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: %w", err)
+	}
 
 	if err := os.MkdirAll(filepath.Dir(paths.CloneDir), 0o755); err != nil {
 		return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: mkdir clone parent: %w", err)

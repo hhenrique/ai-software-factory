@@ -78,7 +78,7 @@ func main() {
 	w := worker.New(c, taskQueue, worker.Options{})
 	w.RegisterWorkflow(conductor.RunWorkflow)
 
-	gitActivities := &gitops.Activities{Paths: repoconfig.NewEnvProvider()}
+	gitActivities := &gitops.Activities{Paths: repoconfig.DBProvider{Pool: eventPool}}
 	verifyActivities := &verify.Activities{}
 	prActivities := &pr.Activities{}
 	harnessActivities := &harness.Activities{}

@@ -32,15 +32,19 @@ type Repository struct {
 	CloneURL        string    `json:"clone_url"`
 	TestCommand     string    `json:"test_command"`
 	DefaultWorkflow string    `json:"default_workflow"`
-	Enabled         bool      `json:"enabled"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	// WorktreeRoot overrides internal/settings' global "factory_root" for
+	// this repo only — "" means inherit the global default (see
+	// internal/repoconfig.DBProvider).
+	WorktreeRoot string    `json:"worktree_root"`
+	Enabled      bool      `json:"enabled"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // List returns every registered repository, most recently created first.
 func List(ctx context.Context, pool *pgxpool.Pool) ([]Repository, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT name, clone_url, test_command, default_workflow, enabled, created_at, updated_at
+		SELECT name, clone_url, test_command, default_workflow, worktree_root, enabled, created_at, updated_at
 		FROM repositories ORDER BY created_at DESC
 	`)
 	if err != nil {
@@ -51,7 +55,7 @@ func List(ctx context.Context, pool *pgxpool.Pool) ([]Repository, error) {
 	var out []Repository
 	for rows.Next() {
 		var r Repository
-		if err := rows.Scan(&r.Name, &r.CloneURL, &r.TestCommand, &r.DefaultWorkflow, &r.Enabled, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		if err := rows.Scan(&r.Name, &r.CloneURL, &r.TestCommand, &r.DefaultWorkflow, &r.WorktreeRoot, &r.Enabled, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("repositories: list: scan: %w", err)
 		}
 		out = append(out, r)
@@ -67,9 +71,9 @@ func List(ctx context.Context, pool *pgxpool.Pool) ([]Repository, error) {
 func Get(ctx context.Context, pool *pgxpool.Pool, name string) (Repository, error) {
 	var r Repository
 	err := pool.QueryRow(ctx, `
-		SELECT name, clone_url, test_command, default_workflow, enabled, created_at, updated_at
+		SELECT name, clone_url, test_command, default_workflow, worktree_root, enabled, created_at, updated_at
 		FROM repositories WHERE name = $1
-	`, name).Scan(&r.Name, &r.CloneURL, &r.TestCommand, &r.DefaultWorkflow, &r.Enabled, &r.CreatedAt, &r.UpdatedAt)
+	`, name).Scan(&r.Name, &r.CloneURL, &r.TestCommand, &r.DefaultWorkflow, &r.WorktreeRoot, &r.Enabled, &r.CreatedAt, &r.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Repository{}, ErrNotFound
 	}
@@ -84,14 +88,14 @@ func Get(ctx context.Context, pool *pgxpool.Pool, name string) (Repository, erro
 // reported as-is rather than silently upserting — registering under a
 // name someone else already claimed is a mistake worth surfacing, not
 // something to paper over.
-func Insert(ctx context.Context, pool *pgxpool.Pool, name, cloneURL, testCommand, defaultWorkflow string) (Repository, error) {
+func Insert(ctx context.Context, pool *pgxpool.Pool, name, cloneURL, testCommand, defaultWorkflow, worktreeRoot string) (Repository, error) {
 	var r Repository
 	err := pool.QueryRow(ctx, `
-		INSERT INTO repositories (name, clone_url, test_command, default_workflow)
-		VALUES ($1, $2, $3, $4)
-		RETURNING name, clone_url, test_command, default_workflow, enabled, created_at, updated_at
-	`, name, cloneURL, testCommand, defaultWorkflow).Scan(
-		&r.Name, &r.CloneURL, &r.TestCommand, &r.DefaultWorkflow, &r.Enabled, &r.CreatedAt, &r.UpdatedAt)
+		INSERT INTO repositories (name, clone_url, test_command, default_workflow, worktree_root)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING name, clone_url, test_command, default_workflow, worktree_root, enabled, created_at, updated_at
+	`, name, cloneURL, testCommand, defaultWorkflow, worktreeRoot).Scan(
+		&r.Name, &r.CloneURL, &r.TestCommand, &r.DefaultWorkflow, &r.WorktreeRoot, &r.Enabled, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return Repository{}, fmt.Errorf("repositories: insert %q: %w", name, err)
 	}
@@ -113,20 +117,20 @@ func SetEnabled(ctx context.Context, pool *pgxpool.Pool, name string, enabled bo
 	return nil
 }
 
-// Update changes a repository's test command and default workflow —
-// deliberately not name or clone_url: the name is the canonical identity
-// rows are keyed on (cmd/submittask's -repo, the primary key here), and
-// changing it is really registering a different repository, not editing
-// this one. Use Delete + Insert for that. ErrNotFound if name isn't
-// registered.
-func Update(ctx context.Context, pool *pgxpool.Pool, name, testCommand, defaultWorkflow string) (Repository, error) {
+// Update changes a repository's test command, default workflow, and
+// worktree root override — deliberately not name or clone_url: the name
+// is the canonical identity rows are keyed on (cmd/submittask's -repo,
+// the primary key here), and changing it is really registering a
+// different repository, not editing this one. Use Delete + Insert for
+// that. ErrNotFound if name isn't registered.
+func Update(ctx context.Context, pool *pgxpool.Pool, name, testCommand, defaultWorkflow, worktreeRoot string) (Repository, error) {
 	var r Repository
 	err := pool.QueryRow(ctx, `
-		UPDATE repositories SET test_command = $1, default_workflow = $2, updated_at = now()
-		WHERE name = $3
-		RETURNING name, clone_url, test_command, default_workflow, enabled, created_at, updated_at
-	`, testCommand, defaultWorkflow, name).Scan(
-		&r.Name, &r.CloneURL, &r.TestCommand, &r.DefaultWorkflow, &r.Enabled, &r.CreatedAt, &r.UpdatedAt)
+		UPDATE repositories SET test_command = $1, default_workflow = $2, worktree_root = $3, updated_at = now()
+		WHERE name = $4
+		RETURNING name, clone_url, test_command, default_workflow, worktree_root, enabled, created_at, updated_at
+	`, testCommand, defaultWorkflow, worktreeRoot, name).Scan(
+		&r.Name, &r.CloneURL, &r.TestCommand, &r.DefaultWorkflow, &r.WorktreeRoot, &r.Enabled, &r.CreatedAt, &r.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Repository{}, ErrNotFound
 	}
