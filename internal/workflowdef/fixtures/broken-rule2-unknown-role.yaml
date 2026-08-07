@@ -1,8 +1,7 @@
 workflow: broken-rule2-unknown-role
 version: 1
 
-roles:
-  coder: { harness: codex, model: chatgpt-sol }
+roles: [coder]
 
 budgets:
   verify_rounds: { max_attempts: 2 }

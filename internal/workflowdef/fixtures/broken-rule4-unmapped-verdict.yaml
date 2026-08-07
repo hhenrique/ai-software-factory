@@ -1,8 +1,7 @@
 workflow: broken-rule4-unmapped-verdict
 version: 1
 
-roles:
-  planner: { harness: claude-plan, model: sonnet-5-medium }
+roles: [planner]
 
 steps:
   - id: plan

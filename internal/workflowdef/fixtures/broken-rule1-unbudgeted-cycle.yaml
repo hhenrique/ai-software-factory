@@ -1,8 +1,7 @@
 workflow: broken-rule1-unbudgeted-cycle
 version: 1
 
-roles:
-  coder: { harness: codex, model: chatgpt-sol }
+roles: [coder]
 
 steps:
   - id: a

@@ -1,8 +1,7 @@
 workflow: broken-rule3-missing-malformed-handler
 version: 1
 
-roles:
-  planner: { harness: claude-plan, model: sonnet-5-medium }
+roles: [planner]
 
 steps:
   - id: plan

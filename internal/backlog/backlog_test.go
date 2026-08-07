@@ -187,3 +187,91 @@ func TestListIncludesInsertedHumanTaskWithEmptyRunIDBeforeAttach(t *testing.T) {
 		t.Errorf("Status = %q, want QUEUED", found.Status)
 	}
 }
+
+// TestListDerivesStatusFromRunEventsNotStaleColumn is a regression test:
+// AttachRun sets backlog_tasks.status = 'RUNNING' once and nothing ever
+// updates it again, so a Task whose Run has actually finished used to
+// show RUNNING forever in the Work view. List must now report whatever
+// run_events' latest transition for that run_id actually says.
+func TestListDerivesStatusFromRunEventsNotStaleColumn(t *testing.T) {
+	a := requirePool(t)
+	ctx := context.Background()
+
+	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr-claude-only", "derive status test "+time.Now().Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatalf("InsertHumanTask: %v", err)
+	}
+	runID := "test-run-derive-status-" + time.Now().Format(time.RFC3339Nano)
+	if err := AttachRun(ctx, a.Pool, taskID, runID); err != nil {
+		t.Fatalf("AttachRun: %v", err)
+	}
+
+	statusOf := func() string {
+		tasks, err := List(ctx, a.Pool)
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		for _, task := range tasks {
+			if task.TaskID == taskID {
+				return task.Status
+			}
+		}
+		t.Fatalf("List did not include task %q", taskID)
+		return ""
+	}
+
+	// backlog_tasks.status is still 'RUNNING' from AttachRun and no
+	// run_events row exists yet — List falls back to the stored column.
+	if got := statusOf(); got != "RUNNING" {
+		t.Errorf("Status before any run_events row = %q, want RUNNING (fallback)", got)
+	}
+
+	// A real mid-DAG transition: still in progress, not one of the
+	// terminal/REVIEW_PENDING states, so List reports RUNNING either way
+	// (same value here, but derived from run_events now, not the column).
+	if _, err := a.Pool.Exec(ctx, `
+		INSERT INTO run_events (run_id, workflow, from_step, to_step, occurred_at)
+		VALUES ($1, 'issue-to-pr-claude-only', 'provision', 'plan', now())
+	`, runID); err != nil {
+		t.Fatalf("insert run_events (plan): %v", err)
+	}
+	if got := statusOf(); got != "RUNNING" {
+		t.Errorf("Status mid-DAG = %q, want RUNNING", got)
+	}
+
+	// The Run actually fails (internal/conductor.recordFailure's terminal
+	// event) — backlog_tasks.status is still the untouched 'RUNNING' from
+	// AttachRun, but List must now report FAILED.
+	wantReason := "no on: mapping for outcome \"\""
+	if _, err := a.Pool.Exec(ctx, `
+		INSERT INTO run_events (run_id, workflow, from_step, to_step, occurred_at, failure_reason)
+		VALUES ($1, 'issue-to-pr-claude-only', 'plan', 'FAILED', now(), $2)
+	`, runID, wantReason); err != nil {
+		t.Fatalf("insert run_events (FAILED): %v", err)
+	}
+	if got := statusOf(); got != "FAILED" {
+		t.Errorf("Status after a FAILED run_events row = %q, want FAILED", got)
+	}
+
+	tasks, err := List(ctx, a.Pool)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var gotReason string
+	for _, task := range tasks {
+		if task.TaskID == taskID {
+			gotReason = task.FailureReason
+		}
+	}
+	if gotReason != wantReason {
+		t.Errorf("FailureReason = %q, want %q", gotReason, wantReason)
+	}
+
+	var stillStoredAsRunning string
+	if err := a.Pool.QueryRow(ctx, `SELECT status FROM backlog_tasks WHERE task_id = $1`, taskID).Scan(&stillStoredAsRunning); err != nil {
+		t.Fatalf("query back backlog_tasks.status: %v", err)
+	}
+	if stillStoredAsRunning != "RUNNING" {
+		t.Errorf("backlog_tasks.status = %q, want it to still literally say RUNNING (proving List derives, doesn't rely on this column being updated)", stillStoredAsRunning)
+	}
+}

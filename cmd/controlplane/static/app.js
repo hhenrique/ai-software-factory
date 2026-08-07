@@ -508,6 +508,9 @@ function renderWorkflows(container) {
     errorBanner.textContent = String(err.message || err);
     errorBanner.style.display = "block";
   }
+  function clearError() {
+    errorBanner.style.display = "none";
+  }
 
   const listCard = document.createElement("div");
   listCard.className = "card";
@@ -522,14 +525,34 @@ function renderWorkflows(container) {
 
   const hint = document.createElement("p");
   hint.className = "hint";
-  hint.textContent = "Read-only: scanned from workflows/ on disk. Edited as YAML, checked into git.";
+  hint.textContent = "Steps/DAG are read-only: scanned from workflows/ on disk, edited as YAML, " +
+    "checked into git. Which Worker plays each role is not — assign it below; it takes effect on the " +
+    "next Run, no YAML edit needed.";
   wrap.appendChild(hint);
 
   container.appendChild(wrap);
 
-  apiRequest("/api/workflows")
-    .then((infos) => renderList(infos || []))
+  // Fetched once, reused by every row's role picker — one round trip
+  // regardless of how many roles across how many workflows need a
+  // <select>.
+  let allWorkers = [];
+  const workersReady = apiRequest("/api/workers")
+    .then((all) => {
+      allWorkers = all || [];
+    })
     .catch(showError);
+
+  async function refresh() {
+    clearError();
+    let infos;
+    try {
+      infos = await apiRequest("/api/workflows");
+    } catch (err) {
+      showError(err);
+      return;
+    }
+    renderList(infos || []);
+  }
 
   function renderList(infos) {
     const validCount = infos.filter((i) => i.valid).length;
@@ -564,10 +587,8 @@ function renderWorkflows(container) {
 
     const meta = document.createElement("div");
     meta.className = "list-row-meta";
-    const roleSummary = (info.roles || []).map((r) => `${r.name}: ${r.harness}/${r.model}`).join(", ");
     const bits = [info.path];
     if (info.step_count) bits.push(info.step_count + " steps");
-    if (roleSummary) bits.push(roleSummary);
     if (info.has_trigger) bits.push("triggered");
     meta.textContent = bits.join("  ·  ");
     main.appendChild(meta);
@@ -577,6 +598,10 @@ function renderWorkflows(container) {
       errList.className = "list-row-meta text-negative";
       errList.textContent = info.errors.join("; ");
       main.appendChild(errList);
+    }
+
+    if (info.roles && info.roles.length > 0) {
+      main.appendChild(buildRolesSection(info));
     }
 
     row.appendChild(main);
@@ -591,6 +616,76 @@ function renderWorkflows(container) {
 
     return row;
   }
+
+  // buildRolesSection renders one row per declared role — a label plus a
+  // Worker <select> defaulted to the role's current assignment (empty
+  // means "declared but unassigned," the same state taskintake.Submit
+  // refuses to start a Run over). Each picker commits independently on
+  // change, no separate edit-mode/Save step needed (unlike Repositories'
+  // row, which batches several fields into one edit).
+  function buildRolesSection(info) {
+    const section = document.createElement("div");
+    section.className = "role-assignments";
+
+    for (const role of info.roles) {
+      const roleRow = document.createElement("div");
+      roleRow.className = "role-assignment-row";
+
+      const label = document.createElement("span");
+      label.className = "role-assignment-label";
+      label.textContent = role.name;
+      roleRow.appendChild(label);
+
+      const select = document.createElement("select");
+      select.className = "role-assignment-select";
+      select.innerHTML = `<option value="">(unassigned)</option>`;
+      workersReady.then(() => {
+        for (const worker of allWorkers) {
+          const opt = document.createElement("option");
+          opt.value = worker.id;
+          opt.textContent = `${worker.name} (${worker.harness}/${worker.model})`;
+          select.appendChild(opt);
+        }
+        select.value = role.worker_id || "";
+      });
+      select.addEventListener("change", async () => {
+        clearError();
+        select.disabled = true;
+        try {
+          if (select.value) {
+            await apiRequest("/api/role-assignments", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                workflow: info.workflow,
+                role: role.name,
+                worker_id: parseInt(select.value, 10),
+              }),
+            });
+          } else {
+            // "(unassigned)" — a real state, distinct from posting a
+            // worker_id of 0 (which would just fail role_assignments'
+            // foreign key).
+            await apiRequest("/api/role-assignments/delete", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ workflow: info.workflow, role: role.name }),
+            });
+          }
+        } catch (err) {
+          showError(err);
+        } finally {
+          select.disabled = false;
+        }
+      });
+      roleRow.appendChild(select);
+      section.appendChild(roleRow);
+    }
+
+    return section;
+  }
+
+  refresh();
 }
 
 // ---- workers view ----
@@ -607,6 +702,37 @@ function renderWorkers(container) {
     errorBanner.textContent = String(err.message || err);
     errorBanner.style.display = "block";
   }
+  function clearError() {
+    errorBanner.style.display = "none";
+  }
+
+  const formCard = document.createElement("div");
+  formCard.className = "card";
+  formCard.innerHTML = `
+    <div class="card-header">
+      <h2>Add worker</h2>
+    </div>
+    <div class="field-stack">
+      <div class="field">
+        <label for="wf-name">Name</label>
+        <input id="wf-name" type="text" placeholder="e.g. Sonnet — high effort">
+      </div>
+      <div class="field">
+        <label for="wf-harness">Harness</label>
+        <input id="wf-harness" type="text" placeholder="e.g. claude-code">
+      </div>
+      <div class="field">
+        <label for="wf-model">Model</label>
+        <input id="wf-model" type="text" placeholder="e.g. sonnet">
+      </div>
+      <div class="field">
+        <label for="wf-effort">Effort</label>
+        <input id="wf-effort" type="text" placeholder="e.g. low, medium, high (optional)">
+      </div>
+      <button class="primary" id="wf-submit">+ Add worker</button>
+    </div>
+  `;
+  wrap.appendChild(formCard);
 
   const listCard = document.createElement("div");
   listCard.className = "card";
@@ -621,67 +747,237 @@ function renderWorkers(container) {
 
   const hint = document.createElement("p");
   hint.className = "hint";
-  hint.textContent = "Derived from every Workflow Definition's roles: block, grouped by " +
-    "(harness, model) — changing one here means changing all of its usages below at once.";
+  hint.textContent = "A Worker is a (harness, model, effort) triad, independent of any Workflow. " +
+    "Assign one to a role from the Workflows view — editing a Worker here immediately affects every " +
+    "assignment pointing at it.";
   wrap.appendChild(hint);
 
   container.appendChild(wrap);
 
-  apiRequest("/api/workers")
-    .then((workers) => renderList(workers || []))
-    .catch(showError);
+  async function refresh() {
+    clearError();
+    let all;
+    try {
+      all = await apiRequest("/api/workers");
+    } catch (err) {
+      showError(err);
+      return;
+    }
+    renderList(all || []);
+  }
 
-  function renderList(workers) {
-    const usageCount = workers.reduce((sum, w) => sum + w.usages.length, 0);
+  function renderList(all) {
+    const usageCount = all.reduce((sum, w) => sum + w.usages.length, 0);
     document.getElementById("worker-count").textContent =
-      `Workers — ${workers.length} distinct, ${usageCount} role usages`;
+      `Workers — ${all.length} total, ${usageCount} role assignment${usageCount === 1 ? "" : "s"}`;
 
     list.innerHTML = "";
-    if (workers.length === 0) {
+    if (all.length === 0) {
       const empty = document.createElement("div");
       empty.className = "empty-state";
-      empty.textContent = "No roles found in any Workflow Definition.";
+      empty.textContent = "No workers configured yet.";
       list.appendChild(empty);
       return;
     }
 
-    for (const worker of workers) {
-      list.appendChild(buildWorkerRow(worker));
+    for (const worker of all) {
+      list.appendChild(buildViewRow(worker));
     }
   }
 
-  function buildWorkerRow(worker) {
+  function workerMeta(worker) {
+    const bits = [`${worker.harness} / ${worker.model}`];
+    if (worker.params && worker.params.effort) bits.push("effort: " + worker.params.effort);
+    return bits.join("  ·  ");
+  }
+
+  function usageText(worker) {
+    if (worker.usages.length === 0) return "not assigned to any role";
+    return worker.usages.map((u) => `${u.workflow}: ${u.role}`).join(", ");
+  }
+
+  function buildViewRow(worker) {
     const row = document.createElement("div");
     row.className = "list-row";
 
     const main = document.createElement("div");
     main.className = "list-row-main";
-
     const name = document.createElement("div");
     name.className = "list-row-name";
-    name.textContent = `${worker.harness} / ${worker.model}`;
+    name.textContent = worker.name;
     main.appendChild(name);
-
-    const usageText = worker.usages
-      .map((u) => `${u.workflow}: ${u.role}` + (u.effort ? ` (effort: ${u.effort})` : ""))
-      .join(", ");
     const meta = document.createElement("div");
     meta.className = "list-row-meta";
-    meta.textContent = usageText;
+    meta.textContent = workerMeta(worker);
     main.appendChild(meta);
-
+    const usage = document.createElement("div");
+    usage.className = "list-row-meta";
+    usage.textContent = usageText(worker);
+    main.appendChild(usage);
     row.appendChild(main);
 
     const actions = document.createElement("div");
     actions.className = "list-row-actions";
+
+    const editBtn = document.createElement("button");
+    editBtn.className = "link";
+    editBtn.textContent = "Edit";
+    editBtn.addEventListener("click", () => {
+      row.replaceWith(buildEditRow(worker));
+    });
+    actions.appendChild(editBtn);
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "link";
+    deleteBtn.textContent = "Delete";
+    deleteBtn.addEventListener("click", async () => {
+      if (!confirm(`Delete ${worker.name}? This can't be undone.`)) return;
+      clearError();
+      deleteBtn.disabled = true;
+      try {
+        await apiRequest("/api/workers/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: worker.id }),
+        });
+        await refresh();
+      } catch (err) {
+        showError(err);
+        deleteBtn.disabled = false;
+      }
+    });
+    actions.appendChild(deleteBtn);
+
     const badge = document.createElement("span");
-    badge.className = "badge enabled";
+    badge.className = "badge " + (worker.usages.length > 0 ? "enabled" : "disabled");
     badge.textContent = worker.usages.length + " usage" + (worker.usages.length === 1 ? "" : "s");
     actions.appendChild(badge);
-    row.appendChild(actions);
 
+    row.appendChild(actions);
     return row;
   }
+
+  function buildEditRow(worker) {
+    const row = document.createElement("div");
+    row.className = "list-row list-row-editing";
+
+    const main = document.createElement("div");
+    main.className = "list-row-main";
+    const name = document.createElement("div");
+    name.className = "list-row-name";
+    name.textContent = worker.name;
+    main.appendChild(name);
+
+    const editForm = document.createElement("div");
+    editForm.className = "field-stack";
+    editForm.innerHTML = `
+      <div class="field">
+        <label>Name</label>
+        <input type="text" class="edit-name">
+      </div>
+      <div class="field">
+        <label>Harness</label>
+        <input type="text" class="edit-harness">
+      </div>
+      <div class="field">
+        <label>Model</label>
+        <input type="text" class="edit-model">
+      </div>
+      <div class="field">
+        <label>Effort</label>
+        <input type="text" class="edit-effort">
+      </div>
+    `;
+    main.appendChild(editForm);
+    row.appendChild(main);
+
+    const nameInput = editForm.querySelector(".edit-name");
+    const harnessInput = editForm.querySelector(".edit-harness");
+    const modelInput = editForm.querySelector(".edit-model");
+    const effortInput = editForm.querySelector(".edit-effort");
+    nameInput.value = worker.name;
+    harnessInput.value = worker.harness;
+    modelInput.value = worker.model;
+    effortInput.value = (worker.params && worker.params.effort) || "";
+
+    const actions = document.createElement("div");
+    actions.className = "list-row-actions";
+
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "primary";
+    saveBtn.textContent = "Save";
+    saveBtn.addEventListener("click", async () => {
+      clearError();
+      saveBtn.disabled = true;
+      const effort = effortInput.value.trim();
+      try {
+        await apiRequest("/api/workers/update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: worker.id,
+            name: nameInput.value.trim(),
+            harness: harnessInput.value.trim(),
+            model: modelInput.value.trim(),
+            params: effort ? { effort: effort } : {},
+          }),
+        });
+        await refresh();
+      } catch (err) {
+        showError(err);
+        saveBtn.disabled = false;
+      }
+    });
+    actions.appendChild(saveBtn);
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "link";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.addEventListener("click", () => {
+      row.replaceWith(buildViewRow(worker));
+    });
+    actions.appendChild(cancelBtn);
+
+    row.appendChild(actions);
+    return row;
+  }
+
+  document.getElementById("wf-submit").addEventListener("click", async () => {
+    clearError();
+    const name = document.getElementById("wf-name").value.trim();
+    const harness = document.getElementById("wf-harness").value.trim();
+    const model = document.getElementById("wf-model").value.trim();
+    const effort = document.getElementById("wf-effort").value.trim();
+    if (!name || !harness || !model) {
+      showError(new Error("Name, harness, and model are required."));
+      return;
+    }
+    const submit = document.getElementById("wf-submit");
+    submit.disabled = true;
+    try {
+      await apiRequest("/api/workers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name,
+          harness: harness,
+          model: model,
+          params: effort ? { effort: effort } : {},
+        }),
+      });
+      document.getElementById("wf-name").value = "";
+      document.getElementById("wf-harness").value = "";
+      document.getElementById("wf-model").value = "";
+      document.getElementById("wf-effort").value = "";
+      await refresh();
+    } catch (err) {
+      showError(err);
+    } finally {
+      submit.disabled = false;
+    }
+  });
+
+  refresh();
 }
 
 // ---- work (task) view ----
@@ -838,6 +1134,13 @@ function renderWork(container) {
     if (task.run_id) bits.push("run: " + task.run_id);
     meta.textContent = bits.join("  ·  ");
     main.appendChild(meta);
+
+    if (task.status === "FAILED") {
+      const reason = document.createElement("div");
+      reason.className = "list-row-meta text-negative";
+      reason.textContent = task.failure_reason || "Failed (no reason recorded — this Run predates failure tracking)";
+      main.appendChild(reason);
+    }
 
     row.appendChild(main);
 

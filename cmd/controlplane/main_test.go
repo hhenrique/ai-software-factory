@@ -22,7 +22,9 @@ import (
 	"factory/internal/eventlog"
 	"factory/internal/inbox"
 	"factory/internal/repositories"
+	"factory/internal/roleassignment"
 	"factory/internal/temporalconn"
+	"factory/internal/workers"
 	"factory/internal/workflowdef"
 )
 
@@ -125,7 +127,11 @@ func TestListWorkflowFilesMissingDirErrors(t *testing.T) {
 }
 
 func TestLoadWorkflowInfoValidFile(t *testing.T) {
-	info := loadWorkflowInfo("../../workflows/issue-to-pr-claude-only.yaml")
+	// nil roleAssignments (no DB lookup) — this test is pure YAML parsing,
+	// same as before harness/model moved to the database. Role enrichment
+	// against a real assignment is covered by
+	// TestListWorkflowInfoEnrichesRolesWithCurrentAssignment below.
+	info := loadWorkflowInfo("../../workflows/issue-to-pr-claude-only.yaml", nil)
 	if !info.Valid {
 		t.Fatalf("Valid = false, Errors = %v", info.Errors)
 	}
@@ -136,11 +142,11 @@ func TestLoadWorkflowInfoValidFile(t *testing.T) {
 		t.Errorf("StepCount = 0, want > 0")
 	}
 	if len(info.Roles) != 3 {
-		t.Errorf("Roles = %v, want 3 (planner, coder, reviewer)", info.Roles)
+		t.Fatalf("Roles = %v, want 3 (planner, coder, reviewer)", info.Roles)
 	}
 	for _, role := range info.Roles {
-		if role.Harness != "claude-code" {
-			t.Errorf("role %q harness = %q, want claude-code", role.Name, role.Harness)
+		if role.WorkerID != 0 || role.Harness != "" {
+			t.Errorf("role %q = %+v, want unassigned (no roleAssignments lookup given)", role.Name, role)
 		}
 	}
 }
@@ -255,7 +261,7 @@ func TestWorkflowGraphHandlerMissingPathParam(t *testing.T) {
 }
 
 func TestLoadWorkflowInfoMissingFile(t *testing.T) {
-	info := loadWorkflowInfo("../../workflows/does-not-exist.yaml")
+	info := loadWorkflowInfo("../../workflows/does-not-exist.yaml", nil)
 	if info.Valid {
 		t.Fatalf("Valid = true for a missing file")
 	}
@@ -265,6 +271,7 @@ func TestLoadWorkflowInfoMissingFile(t *testing.T) {
 }
 
 func TestListWorkflowInfoIncludesEveryFileEvenIfOneParticularFails(t *testing.T) {
+	pool := requirePool(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(dir+"/good.yaml", []byte(`
 workflow: good
@@ -281,7 +288,7 @@ steps:
 		t.Fatal(err)
 	}
 
-	infos, err := listWorkflowInfo(dir)
+	infos, err := listWorkflowInfo(context.Background(), dir, pool)
 	if err != nil {
 		t.Fatalf("listWorkflowInfo: %v", err)
 	}
@@ -301,93 +308,80 @@ steps:
 	}
 }
 
-func TestAggregateWorkersGroupsByHarnessAndModelNotRoleName(t *testing.T) {
-	infos := []WorkflowInfo{
-		{
-			Path: "wf-a.yaml", Workflow: "wf-a",
-			Roles: []RoleInfo{
-				{Name: "coder", Harness: "claude-code", Model: "sonnet", Params: map[string]string{"effort": "high"}},
-				{Name: "reviewer", Harness: "claude-code", Model: "sonnet"},
-			},
-		},
-		{
-			Path: "wf-b.yaml", Workflow: "wf-b",
-			Roles: []RoleInfo{
-				// Different role name ("planner"), same (harness, model) as
-				// wf-a's "coder"/"reviewer" — must land in the same group.
-				{Name: "planner", Harness: "claude-code", Model: "sonnet"},
-				// Same role name "coder" as wf-a, but a different model —
-				// must NOT be grouped with wf-a's "coder".
-				{Name: "coder", Harness: "codex", Model: "chatgpt-sol"},
-			},
-		},
+func TestBuildWorkerInfosGroupsUsagesByWorkerIDNotContent(t *testing.T) {
+	// Two workers configured identically (same harness/model) stay two
+	// distinct entries — unlike the old YAML-derived aggregation, a
+	// Worker's identity is its row (id), not its content, since it's a
+	// real persisted, independently-editable entity now.
+	all := []workers.Worker{
+		{ID: 1, Name: "Sonnet A", Harness: "claude-code", Model: "sonnet"},
+		{ID: 2, Name: "Sonnet B", Harness: "claude-code", Model: "sonnet"},
+	}
+	assignments := []roleassignment.Assignment{
+		{Workflow: "wf-a", Role: "coder", WorkerID: 1},
+		{Workflow: "wf-a", Role: "reviewer", WorkerID: 1},
+		{Workflow: "wf-b", Role: "planner", WorkerID: 2},
 	}
 
-	workers := aggregateWorkers(infos)
-	if len(workers) != 2 {
-		t.Fatalf("len(workers) = %d, want 2 ((claude-code,sonnet) and (codex,chatgpt-sol))", len(workers))
+	infos := buildWorkerInfos(all, assignments)
+	if len(infos) != 2 {
+		t.Fatalf("len(infos) = %d, want 2", len(infos))
 	}
 
-	byKey := map[string]WorkerInfo{}
-	for _, w := range workers {
-		byKey[w.Harness+"/"+w.Model] = w
+	byID := map[int64]WorkerInfo{}
+	for _, w := range infos {
+		byID[w.ID] = w
 	}
-
-	claudeSonnet, ok := byKey["claude-code/sonnet"]
-	if !ok {
-		t.Fatalf("missing claude-code/sonnet group: %+v", workers)
+	if len(byID[1].Usages) != 2 {
+		t.Errorf("worker 1 usages = %+v, want 2 (coder+reviewer from wf-a)", byID[1].Usages)
 	}
-	if len(claudeSonnet.Usages) != 3 {
-		t.Errorf("claude-code/sonnet usages = %v, want 3 (coder+reviewer from wf-a, planner from wf-b)", claudeSonnet.Usages)
-	}
-	var foundEffort bool
-	for _, u := range claudeSonnet.Usages {
-		if u.Role == "coder" && u.Workflow == "wf-a" && u.Effort == "high" {
-			foundEffort = true
-		}
-	}
-	if !foundEffort {
-		t.Errorf("expected wf-a's coder usage to carry effort=high, got %+v", claudeSonnet.Usages)
-	}
-
-	codex, ok := byKey["codex/chatgpt-sol"]
-	if !ok {
-		t.Fatalf("missing codex/chatgpt-sol group: %+v", workers)
-	}
-	if len(codex.Usages) != 1 || codex.Usages[0].Workflow != "wf-b" || codex.Usages[0].Role != "coder" {
-		t.Errorf("codex/chatgpt-sol usages = %+v, want exactly wf-b's coder", codex.Usages)
+	if len(byID[2].Usages) != 1 || byID[2].Usages[0].Workflow != "wf-b" || byID[2].Usages[0].Role != "planner" {
+		t.Errorf("worker 2 usages = %+v, want exactly wf-b's planner", byID[2].Usages)
 	}
 }
 
-func TestAggregateWorkersEmptyInput(t *testing.T) {
-	if workers := aggregateWorkers(nil); len(workers) != 0 {
-		t.Errorf("aggregateWorkers(nil) = %v, want empty", workers)
+func TestBuildWorkerInfosEmptyInput(t *testing.T) {
+	if infos := buildWorkerInfos(nil, nil); len(infos) != 0 {
+		t.Errorf("buildWorkerInfos(nil, nil) = %v, want empty", infos)
 	}
 }
 
-func TestListWorkersHandlerReflectsRealWorkflowFiles(t *testing.T) {
+func TestListWorkersHandlerReflectsRealAssignments(t *testing.T) {
+	pool := requirePool(t)
+	ctx := context.Background()
+	suffix := time.Now().Format(time.RFC3339Nano)
+
+	w, err := workers.Create(ctx, pool, "test-worker-"+suffix, "claude-code", "sonnet", map[string]string{"effort": "high"})
+	if err != nil {
+		t.Fatalf("workers.Create: %v", err)
+	}
+	workflow := "test-workflow-" + suffix
+	if _, err := roleassignment.Set(ctx, pool, workflow, "coder", w.ID); err != nil {
+		t.Fatalf("roleassignment.Set: %v", err)
+	}
+
 	req := httptest.NewRequest(http.MethodGet, "/api/workers", nil)
 	rec := httptest.NewRecorder()
-	listWorkersHandler("../../workflows")(rec, req)
+	listWorkersHandler(pool)(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	var workers []WorkerInfo
-	if err := json.Unmarshal(rec.Body.Bytes(), &workers); err != nil {
+	var infos []WorkerInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &infos); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	found := false
-	for _, w := range workers {
-		if w.Harness == "claude-code" && w.Model == "sonnet" {
-			found = true
-			if len(w.Usages) != 3 {
-				t.Errorf("claude-code/sonnet usages = %v, want 3 (planner/coder/reviewer from issue-to-pr-claude-only)", w.Usages)
+	for _, info := range infos {
+		if info.ID != w.ID {
+			continue
+		}
+		for _, u := range info.Usages {
+			if u.Workflow == workflow && u.Role == "coder" {
+				return // found
 			}
 		}
+		t.Fatalf("worker %d usages = %+v, missing %s/coder", w.ID, info.Usages, workflow)
 	}
-	if !found {
-		t.Fatalf("expected a claude-code/sonnet worker group, got %+v", workers)
-	}
+	t.Fatalf("created worker %d not found in response: %+v", w.ID, infos)
 }
 
 func TestCreateListEnableDisableRepositoryHandlers(t *testing.T) {
@@ -541,6 +535,30 @@ func TestCreateAndListTaskHandlers(t *testing.T) {
 		"https://github.com/hhenrique/toy-repo.git", "true", "../../workflows/issue-to-pr-claude-only.yaml"); err != nil {
 		t.Fatalf("repositories.Insert: %v", err)
 	}
+
+	// taskintake.Submit now resolves every declared role to a Worker via
+	// internal/roleassignment before starting the Run — seed one worker
+	// played across all three roles issue-to-pr-claude-only.yaml declares,
+	// same as any other real submission would need configured first.
+	worker, err := workers.Create(context.Background(), pool, "cp-task-test-worker-"+time.Now().Format(time.RFC3339Nano), "claude-code", "sonnet", nil)
+	if err != nil {
+		t.Fatalf("workers.Create: %v", err)
+	}
+	for _, role := range []string{"planner", "coder", "reviewer"} {
+		if _, err := roleassignment.Set(context.Background(), pool, "issue-to-pr-claude-only", role, worker.ID); err != nil {
+			t.Fatalf("roleassignment.Set(%s): %v", role, err)
+		}
+	}
+	// Leaves issue-to-pr-claude-only's real role assignments untouched for
+	// whoever configures them for actual use — restore to "unassigned"
+	// rather than leaving this test's disposable worker attached.
+	t.Cleanup(func() {
+		ctx := context.Background()
+		for _, role := range []string{"planner", "coder", "reviewer"} {
+			roleassignment.Delete(ctx, pool, "issue-to-pr-claude-only", role)
+		}
+		workers.Delete(ctx, pool, worker.ID)
+	})
 
 	body := `{"repo_name":"` + repoName + `","description":"a task created from the control plane"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/tasks", strings.NewReader(body))

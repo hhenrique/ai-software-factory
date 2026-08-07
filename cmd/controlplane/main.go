@@ -32,8 +32,10 @@ import (
 	"factory/internal/harnesslimits"
 	"factory/internal/inbox"
 	"factory/internal/repositories"
+	"factory/internal/roleassignment"
 	"factory/internal/taskintake"
 	"factory/internal/temporalconn"
+	"factory/internal/workers"
 	"factory/internal/workflowdef"
 )
 
@@ -100,9 +102,15 @@ func main() {
 	mux.HandleFunc("POST /api/repositories/disable", setEnabledHandler(pool, false))
 	mux.HandleFunc("POST /api/repositories/update", updateRepositoryHandler(pool))
 	mux.HandleFunc("POST /api/repositories/delete", deleteRepositoryHandler(pool))
-	mux.HandleFunc("GET /api/workflows", listWorkflowsHandler(d.workflowsDir))
+	mux.HandleFunc("GET /api/workflows", listWorkflowsHandler(d.workflowsDir, pool))
 	mux.HandleFunc("GET /api/workflow-graph", workflowGraphHandler(d.workflowsDir))
-	mux.HandleFunc("GET /api/workers", listWorkersHandler(d.workflowsDir))
+	mux.HandleFunc("GET /api/workers", listWorkersHandler(pool))
+	mux.HandleFunc("POST /api/workers", createWorkerHandler(pool))
+	mux.HandleFunc("POST /api/workers/update", updateWorkerHandler(pool))
+	mux.HandleFunc("POST /api/workers/delete", deleteWorkerHandler(pool))
+	mux.HandleFunc("GET /api/role-assignments", listRoleAssignmentsHandler(pool))
+	mux.HandleFunc("POST /api/role-assignments", setRoleAssignmentHandler(d.workflowsDir, pool))
+	mux.HandleFunc("POST /api/role-assignments/delete", deleteRoleAssignmentHandler(pool))
 	mux.HandleFunc("GET /api/tasks", listTasksHandler(d))
 	mux.HandleFunc("POST /api/tasks", createTaskHandler(d))
 	mux.HandleFunc("GET /api/inbox", listInboxHandler(d))
@@ -125,8 +133,11 @@ func envOr(key, fallback string) string {
 // WorkflowInfo is docs/04's Workflows section, in full now: a Workflow
 // Definition is already checked-in YAML (workflows/), so unlike
 // Repositories this needs no persistence — every field here is derived
-// fresh from disk on each request. Also backs the Repositories form's
-// "Default workflow" combobox (the .Path field), which is why this
+// fresh from disk on each request, except each declared role's current
+// Worker assignment (RoleInfo's Worker/Harness/Model/Params), which comes
+// from the database (internal/roleassignment) — the one piece of a
+// WorkflowInfo that isn't YAML content. Also backs the Repositories
+// form's "Default workflow" combobox (the .Path field), which is why this
 // existed before the rest of the section did.
 type WorkflowInfo struct {
 	Path     string `json:"path"`
@@ -143,15 +154,19 @@ type WorkflowInfo struct {
 	Errors     []string   `json:"errors,omitempty"`
 }
 
-// RoleInfo is one entry of a Workflow Definition's roles: block — the raw
-// material docs/04's Workers (Roles) section aggregates by (harness,
-// model) into WorkerInfo below, rather than its own registry (roles live
-// inline in each Workflow Definition, not as standalone data).
+// RoleInfo is one role this Workflow Definition's roles: list declares,
+// enriched with whichever Worker (internal/workers) is currently assigned
+// to play it for this Workflow (internal/roleassignment). WorkerID == 0
+// means "declared but unassigned" — a real, visible state (not an error
+// here; taskintake.Submit is what actually refuses to start a Run over
+// it), so a human can see and fix it from the Workflows view.
 type RoleInfo struct {
-	Name    string            `json:"name"`
-	Harness string            `json:"harness"`
-	Model   string            `json:"model"`
-	Params  map[string]string `json:"params,omitempty"`
+	Name     string            `json:"name"`
+	WorkerID int64             `json:"worker_id,omitempty"`
+	Worker   string            `json:"worker,omitempty"`
+	Harness  string            `json:"harness,omitempty"`
+	Model    string            `json:"model,omitempty"`
+	Params   map[string]string `json:"params,omitempty"`
 }
 
 // listWorkflowsHandler scans dir for *.yaml/*.yml files and parses +
@@ -160,9 +175,9 @@ type RoleInfo struct {
 // parse or validate is still listed, Valid: false with Errors set, rather
 // than silently dropped — the whole point is surfacing the problem, not
 // hiding it.
-func listWorkflowsHandler(dir string) http.HandlerFunc {
+func listWorkflowsHandler(dir string, pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		infos, err := listWorkflowInfo(dir)
+		infos, err := listWorkflowInfo(r.Context(), dir, pool)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -195,22 +210,60 @@ func listWorkflowFiles(dir string) ([]string, error) {
 }
 
 // listWorkflowInfo parses+validates every workflow file found by
-// listWorkflowFiles. A per-file parse/validate failure becomes an invalid
-// WorkflowInfo entry, not a request-level error — one broken YAML file
-// shouldn't hide every other one from the list.
-func listWorkflowInfo(dir string) ([]WorkflowInfo, error) {
+// listWorkflowFiles, then enriches each declared role with its current
+// Worker assignment — one role_assignments+workers query for the whole
+// batch (currentRoleAssignments), not one per file. A per-file parse/
+// validate failure becomes an invalid WorkflowInfo entry, not a
+// request-level error — one broken YAML file shouldn't hide every other
+// one from the list.
+func listWorkflowInfo(ctx context.Context, dir string, pool *pgxpool.Pool) ([]WorkflowInfo, error) {
 	files, err := listWorkflowFiles(dir)
+	if err != nil {
+		return nil, err
+	}
+	lookup, err := currentRoleAssignments(ctx, pool)
 	if err != nil {
 		return nil, err
 	}
 	infos := make([]WorkflowInfo, len(files))
 	for i, path := range files {
-		infos[i] = loadWorkflowInfo(path)
+		infos[i] = loadWorkflowInfo(path, lookup)
 	}
 	return infos, nil
 }
 
-func loadWorkflowInfo(path string) WorkflowInfo {
+// currentRoleAssignments fetches every role_assignments row joined with
+// its Worker, keyed workflow -> role -> Worker, for loadWorkflowInfo to
+// enrich each RoleInfo with.
+func currentRoleAssignments(ctx context.Context, pool *pgxpool.Pool) (map[string]map[string]workers.Worker, error) {
+	assignments, err := roleassignment.List(ctx, pool)
+	if err != nil {
+		return nil, err
+	}
+	allWorkers, err := workers.List(ctx, pool)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[int64]workers.Worker, len(allWorkers))
+	for _, w := range allWorkers {
+		byID[w.ID] = w
+	}
+
+	lookup := map[string]map[string]workers.Worker{}
+	for _, a := range assignments {
+		w, ok := byID[a.WorkerID]
+		if !ok {
+			continue // shouldn't happen (worker_id is a foreign key) — skip defensively
+		}
+		if lookup[a.Workflow] == nil {
+			lookup[a.Workflow] = map[string]workers.Worker{}
+		}
+		lookup[a.Workflow][a.Role] = w
+	}
+	return lookup, nil
+}
+
+func loadWorkflowInfo(path string, roleAssignments map[string]map[string]workers.Worker) WorkflowInfo {
 	info := WorkflowInfo{Path: path}
 
 	data, err := os.ReadFile(path)
@@ -231,8 +284,16 @@ func loadWorkflowInfo(path string) WorkflowInfo {
 	for _, step := range def.Steps {
 		info.StepIDs = append(info.StepIDs, step.ID)
 	}
-	for name, role := range def.Roles {
-		info.Roles = append(info.Roles, RoleInfo{Name: name, Harness: role.Harness, Model: role.Model, Params: role.Params})
+	for _, name := range def.Roles {
+		ri := RoleInfo{Name: name}
+		if w, ok := roleAssignments[def.Workflow][name]; ok {
+			ri.WorkerID = w.ID
+			ri.Worker = w.Name
+			ri.Harness = w.Harness
+			ri.Model = w.Model
+			ri.Params = w.Params
+		}
+		info.Roles = append(info.Roles, ri)
 	}
 	sort.Slice(info.Roles, func(i, j int) bool { return info.Roles[i].Name < info.Roles[j].Name })
 
@@ -246,90 +307,260 @@ func loadWorkflowInfo(path string) WorkflowInfo {
 	return info
 }
 
-// WorkerInfo is docs/04's Workers (Roles) section: "List of configured
-// roles (name, harness, model/endpoint). Which Workflows reference each
-// role (so changing a role's backing model shows its blast radius)." A
-// "role" isn't a standalone entity anywhere in this system — it's inline
-// per-Workflow-Definition config (RoleInfo) — so this aggregates by the
-// actual thing a config change touches, the (harness, model) pair, not by
-// role name: two workflows' "coder" roles pointing at the same
-// harness/model are the same blast radius even if named differently, and
-// the same role name in two workflows pointing at different models is
-// not. Concurrency limits (also listed in that doc section) aren't here:
-// nothing in this system tracks or enforces them yet ("if needed" in the
-// doc's own words) — there's no data to surface, so this doesn't
-// fabricate a column for it.
+// WorkerInfo is a persisted Worker (internal/workers) plus its current
+// usages — every (workflow, role) pair internal/roleassignment currently
+// points at it, docs/04's "blast radius of changing a role's backing
+// model." Unlike the old scan-and-derive-from-YAML version, this is a
+// direct worker_id foreign-key join now, not content-equality grouping by
+// (harness, model): two Workers configured identically are still two
+// distinct rows here, since a Worker has real identity (a name, an id)
+// independent of what it happens to be configured with.
 type WorkerInfo struct {
-	Harness string      `json:"harness"`
-	Model   string      `json:"model"`
-	Usages  []RoleUsage `json:"usages"`
+	ID      int64             `json:"id"`
+	Name    string            `json:"name"`
+	Harness string            `json:"harness"`
+	Model   string            `json:"model"`
+	Params  map[string]string `json:"params,omitempty"`
+	Usages  []RoleUsage       `json:"usages"`
 }
 
-// RoleUsage is one (Workflow, role name) pair backed by a WorkerInfo's
-// (harness, model) — the "blast radius" entries docs/04 asks for.
+// RoleUsage is one (Workflow, role name) pair currently assigned to a
+// WorkerInfo — the "blast radius" entries docs/04 asks for.
 type RoleUsage struct {
-	WorkflowPath string `json:"workflow_path"`
-	Workflow     string `json:"workflow"`
-	Role         string `json:"role"`
-	Effort       string `json:"effort,omitempty"`
+	Workflow string `json:"workflow"`
+	Role     string `json:"role"`
 }
 
-// listWorkersHandler derives the Workers (Roles) view from the same scan
-// listWorkflowsHandler does — no separate registry, since roles live
-// inline in each Workflow Definition (see WorkerInfo's doc comment).
-func listWorkersHandler(dir string) http.HandlerFunc {
+// listWorkersHandler lists every persisted Worker enriched with its
+// current usages — replaces the old scan-and-aggregate-by-(harness,model)
+// derivation now that Workers are real rows (internal/workers), not
+// inline YAML config.
+func listWorkersHandler(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		infos, err := listWorkflowInfo(dir)
+		all, err := workers.List(r.Context(), pool)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, http.StatusOK, aggregateWorkers(infos))
+		assignments, err := roleassignment.List(r.Context(), pool)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, buildWorkerInfos(all, assignments))
 	}
 }
 
-// aggregateWorkers groups every role usage across infos by (harness,
-// model), sorted for stable output. Roles from a file that failed
-// overall validation are still included — a role's harness/model is
-// meaningful data on its own even if some unrelated part of that file
-// (e.g. a step's context: list) has a separate problem; only a file that
-// failed to parse at all contributes no roles (WorkflowInfo.Roles is
-// simply empty in that case).
-func aggregateWorkers(infos []WorkflowInfo) []WorkerInfo {
-	type key struct{ harness, model string }
-	byKey := map[key]*WorkerInfo{}
-	var order []key
-
-	for _, info := range infos {
-		for _, role := range info.Roles {
-			k := key{role.Harness, role.Model}
-			w, ok := byKey[k]
-			if !ok {
-				w = &WorkerInfo{Harness: role.Harness, Model: role.Model}
-				byKey[k] = w
-				order = append(order, k)
-			}
-			w.Usages = append(w.Usages, RoleUsage{
-				WorkflowPath: info.Path,
-				Workflow:     info.Workflow,
-				Role:         role.Name,
-				Effort:       role.Params["effort"],
-			})
-		}
+func buildWorkerInfos(all []workers.Worker, assignments []roleassignment.Assignment) []WorkerInfo {
+	usagesByWorkerID := map[int64][]RoleUsage{}
+	for _, a := range assignments {
+		usagesByWorkerID[a.WorkerID] = append(usagesByWorkerID[a.WorkerID], RoleUsage{Workflow: a.Workflow, Role: a.Role})
 	}
-
-	sort.Slice(order, func(i, j int) bool {
-		if order[i].harness != order[j].harness {
-			return order[i].harness < order[j].harness
+	infos := make([]WorkerInfo, len(all))
+	for i, w := range all {
+		// Usages: []RoleUsage{}, not usagesByWorkerID[w.ID] directly — a
+		// map miss is a nil slice, which encoding/json renders as `null`
+		// rather than `[]`, and the Workers view calls .length/.map on
+		// this field unconditionally.
+		usages := usagesByWorkerID[w.ID]
+		if usages == nil {
+			usages = []RoleUsage{}
 		}
-		return order[i].model < order[j].model
-	})
-
-	workers := make([]WorkerInfo, len(order))
-	for i, k := range order {
-		workers[i] = *byKey[k]
+		infos[i] = WorkerInfo{ID: w.ID, Name: w.Name, Harness: w.Harness, Model: w.Model, Params: w.Params, Usages: usages}
 	}
-	return workers
+	return infos
+}
+
+// createWorkerRequest is /api/workers' POST body.
+type createWorkerRequest struct {
+	Name    string            `json:"name"`
+	Harness string            `json:"harness"`
+	Model   string            `json:"model"`
+	Params  map[string]string `json:"params"`
+}
+
+func createWorkerHandler(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req createWorkerRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "malformed JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		worker, err := workers.Create(r.Context(), pool, req.Name, req.Harness, req.Model, req.Params)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		writeJSON(w, http.StatusCreated, worker)
+	}
+}
+
+// idRequest is the body for every /api/workers/{action} endpoint keyed
+// by id only.
+type idRequest struct {
+	ID int64 `json:"id"`
+}
+
+// updateWorkerRequest is /api/workers/update's body.
+type updateWorkerRequest struct {
+	ID      int64             `json:"id"`
+	Name    string            `json:"name"`
+	Harness string            `json:"harness"`
+	Model   string            `json:"model"`
+	Params  map[string]string `json:"params"`
+}
+
+func updateWorkerHandler(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req updateWorkerRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "malformed JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		worker, err := workers.Update(r.Context(), pool, req.ID, req.Name, req.Harness, req.Model, req.Params)
+		if errors.Is(err, workers.ErrNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, worker)
+	}
+}
+
+func deleteWorkerHandler(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req idRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "malformed JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		err := workers.Delete(r.Context(), pool, req.ID)
+		if errors.Is(err, workers.ErrNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, workers.ErrInUse) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// listRoleAssignmentsHandler returns every current (workflow, role) ->
+// worker_id assignment — small, whole-table data the Workflows view
+// fetches once and reads client-side, same convention as /api/workflows
+// and /api/workers.
+func listRoleAssignmentsHandler(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		assignments, err := roleassignment.List(r.Context(), pool)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, assignments)
+	}
+}
+
+// setRoleAssignmentRequest is /api/role-assignments' POST body.
+type setRoleAssignmentRequest struct {
+	Workflow string `json:"workflow"`
+	Role     string `json:"role"`
+	WorkerID int64  `json:"worker_id"`
+}
+
+// setRoleAssignmentHandler validates workflow against the actual workflow
+// files on disk before delegating to roleassignment.Set, which has no
+// notion of a workflows directory to check that against itself (see its
+// doc comment).
+func setRoleAssignmentHandler(dir string, pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req setRoleAssignmentRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "malformed JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		known, err := knownWorkflowNames(dir)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !known[req.Workflow] {
+			http.Error(w, fmt.Sprintf("unknown workflow %q", req.Workflow), http.StatusBadRequest)
+			return
+		}
+		assignment, err := roleassignment.Set(r.Context(), pool, req.Workflow, req.Role, req.WorkerID)
+		if errors.Is(err, roleassignment.ErrUnknownRole) || errors.Is(err, roleassignment.ErrUnknownWorker) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, assignment)
+	}
+}
+
+// deleteRoleAssignmentRequest is /api/role-assignments/delete's body —
+// unassigning a role (picking "(unassigned)" in the Workflows view) is a
+// real, valid state, distinct from Set with a worker_id of 0 (which would
+// just fail role_assignments' foreign key).
+type deleteRoleAssignmentRequest struct {
+	Workflow string `json:"workflow"`
+	Role     string `json:"role"`
+}
+
+func deleteRoleAssignmentHandler(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req deleteRoleAssignmentRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "malformed JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		err := roleassignment.Delete(r.Context(), pool, req.Workflow, req.Role)
+		if errors.Is(err, roleassignment.ErrNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// knownWorkflowNames scans dir the same way listWorkflowFiles does,
+// returning the set of Workflow Definition names found — parse-only (not
+// full Validate), since even a currently-invalid file's name is still a
+// legitimate role_assignments target: fixing the YAML and fixing its role
+// assignment aren't ordered relative to each other.
+func knownWorkflowNames(dir string) (map[string]bool, error) {
+	files, err := listWorkflowFiles(dir)
+	if err != nil {
+		return nil, err
+	}
+	names := map[string]bool{}
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		def, err := workflowdef.Parse(data)
+		if err != nil {
+			continue
+		}
+		names[def.Workflow] = true
+	}
+	return names, nil
 }
 
 // listTasksHandler backs docs/04's Work section — every backlog Task,

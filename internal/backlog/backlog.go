@@ -8,12 +8,14 @@ package backlog
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"factory/internal/conductor"
+	"factory/internal/workflowdef"
 )
 
 // Activities holds the projection-store connection pool.
@@ -95,15 +97,41 @@ type Task struct {
 	Description string    `json:"description,omitempty"`
 	Status      string    `json:"status"`
 	CreatedAt   time.Time `json:"created_at"`
+
+	// FailureReason is the error text from the run_events row that set
+	// Status to FAILED (conductor.recordFailure) — "" whenever Status
+	// isn't FAILED, or for a FAILED Task predating that fix (an already-
+	// recorded FAILED transition with no reason attached).
+	FailureReason string `json:"failure_reason,omitempty"`
 }
 
 // List returns every backlog Task, most recently created first — backs
 // cmd/controlplane's Work section.
+//
+// Status is derived from run_events' latest transition for the Task's
+// run_id, not read from backlog_tasks.status directly: that column is
+// only ever written once, by AttachRun when a Run starts (status
+// 'RUNNING'), and nothing updates it again when the Run actually finishes
+// — a stale-forever value once a Run completes/fails/is cancelled.
+// run_events is doc01's actual source of truth for a Run's transitions
+// (and, since internal/conductor.recordFailure, reliably includes the
+// terminal one even for a hard Activity error), so deriving from it here
+// means Status can't drift the way a second, hand-maintained copy of the
+// same fact already has. The stored column is still the fallback for a
+// Task with no run_id yet (before its Run starts, i.e. 'QUEUED') or the
+// rare case a Run's first event hasn't landed yet.
 func List(ctx context.Context, pool *pgxpool.Pool) ([]Task, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT task_id, coalesce(run_id, ''), coalesce(target_repo, ''), coalesce(workflow, ''),
-		       source, coalesce(description, ''), status, created_at
-		FROM backlog_tasks ORDER BY created_at DESC
+		SELECT bt.task_id, coalesce(bt.run_id, ''), coalesce(bt.target_repo, ''), coalesce(bt.workflow, ''),
+		       bt.source, coalesce(bt.description, ''), bt.status, bt.created_at,
+		       latest.to_step, latest.failure_reason
+		FROM backlog_tasks bt
+		LEFT JOIN LATERAL (
+			SELECT to_step, failure_reason FROM run_events
+			WHERE run_events.run_id = bt.run_id
+			ORDER BY occurred_at DESC, id DESC LIMIT 1
+		) latest ON true
+		ORDER BY bt.created_at DESC
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("backlog: list: %w", err)
@@ -113,8 +141,22 @@ func List(ctx context.Context, pool *pgxpool.Pool) ([]Task, error) {
 	var out []Task
 	for rows.Next() {
 		var t Task
-		if err := rows.Scan(&t.TaskID, &t.RunID, &t.TargetRepo, &t.Workflow, &t.Source, &t.Description, &t.Status, &t.CreatedAt); err != nil {
+		var latestToStep, failureReason sql.NullString
+		if err := rows.Scan(&t.TaskID, &t.RunID, &t.TargetRepo, &t.Workflow, &t.Source, &t.Description, &t.Status, &t.CreatedAt,
+			&latestToStep, &failureReason); err != nil {
 			return nil, fmt.Errorf("backlog: list: scan: %w", err)
+		}
+		if latestToStep.Valid && latestToStep.String != "" {
+			if workflowdef.IsTerminalState(latestToStep.String) {
+				// COMPLETED, FAILED, CANCELLED, or REVIEW_PENDING — all
+				// meaningful to show as-is, not collapsed into "RUNNING".
+				t.Status = latestToStep.String
+			} else {
+				t.Status = "RUNNING"
+			}
+		}
+		if t.Status == "FAILED" {
+			t.FailureReason = failureReason.String
 		}
 		out = append(out, t)
 	}

@@ -2,6 +2,7 @@ package conductor_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -289,13 +290,54 @@ func TestRunWorkflowBudgetExhausted(t *testing.T) {
 	env.AssertNotCalled(t, "pr.create_and_link", mock.Anything, mock.Anything)
 }
 
+// TestRunWorkflowRecordsFailedTransitionOnHardActivityError is a
+// regression test for a real bug: a step Activity call returning a raw
+// error (e.g. gitops.WorktreeCreate's "mkdir /var/lib/factory: permission
+// denied" — the exact failure that motivated this test) used to fail the
+// Run with nothing recorded in run_events beyond the initial "start"
+// transition, violating doc01's "every state transition emits a
+// structured event... including Runs that fail before any model call."
+// recordFailure (workflow.go) fixes this — every hard-failure return in
+// RunWorkflow's main loop now goes through it.
+func TestRunWorkflowRecordsFailedTransitionOnHardActivityError(t *testing.T) {
+	def := workflowdef.Definition{
+		Workflow: "hard-activity-error-test",
+		Version:  1,
+		Steps: []workflowdef.Step{
+			{ID: "provision", Type: workflowdef.StepTypeTool, Action: "worktree.create", Next: "COMPLETED"},
+		},
+	}
+	require.Empty(t, workflowdef.Validate(&def))
+
+	env := newTestEnv(t)
+	env.OnActivity("worktree.create", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{}, errors.New("mkdir /var/lib/factory: permission denied")).Once()
+
+	var events []conductor.TransitionEvent
+	env.OnActivity(conductor.RecordEventActivityName, mock.Anything, mock.Anything).
+		Return(func(ctx context.Context, ev conductor.TransitionEvent) error {
+			events = append(events, ev)
+			return nil
+		})
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{Definition: def})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError(), "a hard Activity error must still fail the Run")
+
+	require.NotEmpty(t, events, "the failure must be recorded, not left as only Temporal's own workflow history")
+	last := events[len(events)-1]
+	require.Equal(t, "provision", last.FromStep)
+	require.Equal(t, "FAILED", last.ToStep)
+	require.Contains(t, last.FailureReason, "permission denied",
+		"the recorded event must carry the actual error text, not just that a failure happened")
+}
+
 func TestRunWorkflowMalformedOutputRouting(t *testing.T) {
 	def := workflowdef.Definition{
 		Workflow: "malformed-output-routing",
 		Version:  1,
-		Roles: map[string]workflowdef.Role{
-			"planner": {Harness: "claude-plan", Model: "sonnet-5-medium"},
-		},
+		Roles: []string{"planner"},
 		Steps: []workflowdef.Step{
 			{
 				ID:                "plan",
@@ -434,7 +476,7 @@ func TestRunWorkflowDispatchesCompoundActionSideEffect(t *testing.T) {
 	def := workflowdef.Definition{
 		Workflow: "out-of-scope-test",
 		Version:  1,
-		Roles:    map[string]workflowdef.Role{"coder": {Harness: "claude-code", Model: "x"}},
+		Roles:    []string{"coder"},
 		Steps: []workflowdef.Step{
 			{
 				ID: "coder_response", Type: workflowdef.StepTypeAgent, Role: "coder",
@@ -476,7 +518,7 @@ func TestRunWorkflowNamedBudgetMaxTokensExhausted(t *testing.T) {
 	def := workflowdef.Definition{
 		Workflow: "token-budget-test",
 		Version:  1,
-		Roles:    map[string]workflowdef.Role{"coder": {Harness: "claude-code", Model: "sonnet"}},
+		Roles:    []string{"coder"},
 		Budgets:  map[string]workflowdef.Budget{"execute_budget": {MaxTokens: 100}},
 		Steps: []workflowdef.Step{
 			{
@@ -515,9 +557,7 @@ func TestRunWorkflowHarnessLimitTripsToReviewPending(t *testing.T) {
 	def := workflowdef.Definition{
 		Workflow: "harness-limit-test",
 		Version:  1,
-		Roles: map[string]workflowdef.Role{
-			"coder": {Harness: "claude-code", Model: "sonnet", Params: map[string]string{"effort": "high"}},
-		},
+		Roles: []string{"coder"},
 		Budgets: map[string]workflowdef.Budget{"loop_budget": {MaxAttempts: 10}},
 		Steps: []workflowdef.Step{
 			{
@@ -545,8 +585,9 @@ func TestRunWorkflowHarnessLimitTripsToReviewPending(t *testing.T) {
 	}, time.Minute)
 
 	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{
-		Definition:    def,
-		HarnessLimits: map[string]int{"claude-code/sonnet/high": 50},
+		Definition:      def,
+		HarnessLimits:   map[string]int{"claude-code/sonnet/high": 50},
+		RoleAssignments: map[string]workflowdef.Role{"coder": {Harness: "claude-code", Model: "sonnet", Params: map[string]string{"effort": "high"}}},
 	})
 
 	require.True(t, env.IsWorkflowCompleted())
@@ -566,9 +607,7 @@ func TestRunWorkflowUnconfiguredHarnessComboHasNoLimit(t *testing.T) {
 	def := workflowdef.Definition{
 		Workflow: "harness-limit-unconfigured-test",
 		Version:  1,
-		Roles: map[string]workflowdef.Role{
-			"coder": {Harness: "claude-code", Model: "sonnet", Params: map[string]string{"effort": "high"}},
-		},
+		Roles: []string{"coder"},
 		Budgets: map[string]workflowdef.Budget{"loop_budget": {MaxAttempts: 10}},
 		Steps: []workflowdef.Step{
 			{
@@ -610,10 +649,7 @@ func TestRunWorkflowHarnessLimitSharedAcrossDifferentRoles(t *testing.T) {
 	def := workflowdef.Definition{
 		Workflow: "harness-limit-shared-test",
 		Version:  1,
-		Roles: map[string]workflowdef.Role{
-			"coder":    {Harness: "claude-code", Model: "sonnet", Params: map[string]string{"effort": "high"}},
-			"reviewer": {Harness: "claude-code", Model: "sonnet", Params: map[string]string{"effort": "high"}},
-		},
+		Roles: []string{"coder", "reviewer"},
 		Steps: []workflowdef.Step{
 			{
 				ID: "execute", Type: workflowdef.StepTypeAgent, Role: "coder",
@@ -641,6 +677,10 @@ func TestRunWorkflowHarnessLimitSharedAcrossDifferentRoles(t *testing.T) {
 	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{
 		Definition:    def,
 		HarnessLimits: map[string]int{"claude-code/sonnet/high": 50},
+		RoleAssignments: map[string]workflowdef.Role{
+			"coder":    {Harness: "claude-code", Model: "sonnet", Params: map[string]string{"effort": "high"}},
+			"reviewer": {Harness: "claude-code", Model: "sonnet", Params: map[string]string{"effort": "high"}},
+		},
 	})
 
 	require.True(t, env.IsWorkflowCompleted())

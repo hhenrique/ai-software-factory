@@ -19,14 +19,16 @@ func TestDefaultWorkflowFileParsesAndValidates(t *testing.T) {
 	// itself is relative to the repo root (correct for runtime use from
 	// cmd/submittask or cmd/controlplane); "../../" gets there from this
 	// package's own directory.
-	def, err := parseAndValidateWorkflowFile("../../" + DefaultWorkflowFile)
-	if err != nil {
+	//
+	// This used to also assert every declared role's harness was
+	// claude-code (the reason this file exists instead of just using
+	// issue-to-pr-standard — avoiding needing Codex/Copilot credits). That
+	// assertion doesn't apply anymore: harness/model is no longer part of
+	// the Workflow Definition (see internal/roleassignment) — it's
+	// whichever Worker is currently assigned per role in the database,
+	// runtime state this parse-only test has no access to.
+	if _, err := parseAndValidateWorkflowFile("../../" + DefaultWorkflowFile); err != nil {
 		t.Fatalf("parse/validate %s: %v", DefaultWorkflowFile, err)
-	}
-	for _, role := range def.Roles {
-		if role.Harness != "claude-code" {
-			t.Errorf("role harness = %q, want claude-code (this file exists specifically to avoid needing Codex/Copilot credits)", role.Harness)
-		}
 	}
 }
 

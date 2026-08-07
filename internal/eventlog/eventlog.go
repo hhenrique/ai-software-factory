@@ -39,10 +39,10 @@ func (a *Activities) Registrations() map[string]any {
 func (a *Activities) RecordEvent(ctx context.Context, ev conductor.TransitionEvent) error {
 	_, err := a.Pool.Exec(ctx, `
 		INSERT INTO run_events
-			(run_id, workflow, from_step, to_step, step_id, attempt_number, token_delta, activity_calls)
+			(run_id, workflow, from_step, to_step, step_id, attempt_number, token_delta, activity_calls, failure_reason)
 		VALUES
-			($1, $2, $3, $4, NULLIF($5, ''), $6, $7, $8)
-	`, ev.RunID, ev.Workflow, ev.FromStep, ev.ToStep, ev.StepID, ev.AttemptNumber, ev.TokenDelta, ev.ActivityCalls)
+			($1, $2, $3, $4, NULLIF($5, ''), $6, $7, $8, NULLIF($9, ''))
+	`, ev.RunID, ev.Workflow, ev.FromStep, ev.ToStep, ev.StepID, ev.AttemptNumber, ev.TokenDelta, ev.ActivityCalls, ev.FailureReason)
 	if err != nil {
 		return fmt.Errorf("eventlog: record event: %w", err)
 	}

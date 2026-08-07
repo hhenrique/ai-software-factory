@@ -166,6 +166,12 @@ func runScenario(c client.Client, taskQueue string, def workflowdef.Definition, 
 		FailVerifyUntilAttempt: sc.failVerifyUntilAttempt,
 		Repo:                   repo,
 		HarnessLimits:          harnessLimits,
+		// Not resolved via internal/roleassignment (no DB round trip in
+		// this fixed-scenario smoke test) — a literal standing in for
+		// dependency-bump-minimal.yaml's old inline roles: config, kept
+		// here purely for realism (the stub HarnessInvoke never reads
+		// this, see internal/activities/stub).
+		RoleAssignments: map[string]workflowdef.Role{"coder": {Harness: "codex", Model: "chatgpt-sol"}},
 	})
 	if err != nil {
 		fmt.Printf("      %s: ExecuteWorkflow: %v\n", sc.name, err)

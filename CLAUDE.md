@@ -59,11 +59,21 @@ general-purpose SaaS product.
 - **Run** — one execution attempt of a Workflow definition against a Task.
   Retries are new Runs, never mutations, so every attempt stays traceable
   and replayable.
-- **Role** — a `(harness, model)` pair (e.g. Planner = claude-plan +
-  sonnet-5-medium; Coder = codex + a coding model; Reviewer = a
-  review-focused harness). Roles are deployment-target-agnostic: the
-  backing model may be a frontier API or a self-hosted model — this must
-  never leak into the factory's own hosting/deployment design.
+- **Role** — a named function a step is responsible for: `planner`,
+  `coder`, or `reviewer` — a fixed, closed set (maps 1:1 onto a state in
+  the Run state machine), not something a Workflow invents. A step
+  references a role by name only, never a harness/model directly.
+- **Worker** — the `(harness, model, params)` triad a Role is played by
+  (e.g. claude-plan + sonnet-5-medium; codex + a coding model; a
+  review-focused harness). Persisted, control-plane-CRUD'd
+  (`internal/workers`), independent of any Workflow. Which Worker plays
+  which Role *for a given Workflow* is a separate mapping
+  (`internal/roleassignment`, `(workflow, role) -> worker_id`), edited
+  from the Workflows view — not a YAML field, so swapping a Worker is a
+  control-plane action, not a Workflow rewrite. Workers are
+  deployment-target-agnostic: the backing model may be a frontier API or
+  a self-hosted model — this must never leak into the factory's own
+  hosting/deployment design.
 
 Naming caution: "Workflow" is overloaded. Use "Workflow Definition" for the
 domain YAML DAG and "Temporal Workflow" / "workflow execution" for the

@@ -92,7 +92,7 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 		if currentID == "REVIEW_PENDING" {
 			decision, err := waitForHumanDecision(ctx)
 			if err != nil {
-				return RunResult{}, err
+				return recordFailure(eventActx, runID, def.Workflow, currentID, err)
 			}
 
 			if decision.Action == "cancel" {
@@ -136,10 +136,11 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 
 		step, ok := index[currentID]
 		if !ok {
-			return RunResult{}, fmt.Errorf("conductor: step %q not found in definition %q", currentID, def.Workflow)
+			return recordFailure(eventActx, runID, def.Workflow, currentID,
+				fmt.Errorf("conductor: step %q not found in definition %q", currentID, def.Workflow))
 		}
 
-		harness, model, params := roleConfig(def, step.Role)
+		harness, model, params := roleConfig(in.RoleAssignments, step.Role)
 
 		attemptNumber := 1
 		if step.Budget != "" {
@@ -155,7 +156,8 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 			if exhausted {
 				dest, err := route(actx, runID, step, "budget_exhausted", runContext)
 				if err != nil {
-					return RunResult{}, fmt.Errorf("conductor: step %q: budget %q exhausted but %w", step.ID, step.Budget, err)
+					return recordFailure(eventActx, runID, def.Workflow, step.ID,
+						fmt.Errorf("conductor: step %q: budget %q exhausted but %w", step.ID, step.Budget, err))
 				}
 				recordTransition(eventActx, TransitionEvent{
 					RunID: runID, Workflow: def.Workflow, FromStep: step.ID, ToStep: dest,
@@ -206,7 +208,8 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 		var out ActivityOutput
 		activityName := activityNameFor(*step)
 		if err := workflow.ExecuteActivity(actx, activityName, activityIn).Get(actx, &out); err != nil {
-			return RunResult{}, fmt.Errorf("conductor: activity %q for step %q: %w", activityName, step.ID, err)
+			return recordFailure(eventActx, runID, def.Workflow, step.ID,
+				fmt.Errorf("conductor: activity %q for step %q: %w", activityName, step.ID, err))
 		}
 
 		if step.Budget != "" {
@@ -223,7 +226,8 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 
 		if out.Malformed {
 			if step.OnMalformedOutput == "" {
-				return RunResult{}, fmt.Errorf("conductor: step %q produced malformed output with no on_malformed_output handler", step.ID)
+				return recordFailure(eventActx, runID, def.Workflow, step.ID,
+					fmt.Errorf("conductor: step %q produced malformed output with no on_malformed_output handler", step.ID))
 			}
 			recordTransition(eventActx, TransitionEvent{
 				RunID: runID, Workflow: def.Workflow, FromStep: step.ID, ToStep: step.OnMalformedOutput,
@@ -235,7 +239,7 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 
 		dest, err := route(actx, runID, step, out.Outcome, runContext)
 		if err != nil {
-			return RunResult{}, err
+			return recordFailure(eventActx, runID, def.Workflow, step.ID, err)
 		}
 		recordTransition(eventActx, TransitionEvent{
 			RunID: runID, Workflow: def.Workflow, FromStep: step.ID, ToStep: dest,
@@ -255,6 +259,23 @@ func recordTransition(ctx workflow.Context, ev TransitionEvent) {
 		workflow.GetLogger(ctx).Warn("conductor: failed to record transition event",
 			"error", err, "run_id", ev.RunID, "from_step", ev.FromStep, "to_step", ev.ToStep)
 	}
+}
+
+// recordFailure records a FAILED transition event before returning err as
+// RunWorkflow's own result — doc 01: "every state transition emits a
+// structured event... including Runs that fail before any model call."
+// Every hard failure in RunWorkflow's main loop returns through this
+// (never a bare `return RunResult{}, err`), so a Run that fails outright —
+// an Activity error, an unroutable outcome, a malformed-output step with
+// no handler — leaves the same structured trace in run_events a normal
+// terminal state would, instead of silently ending with only Temporal's
+// own workflow history to explain what happened.
+func recordFailure(ctx workflow.Context, runID, workflowName, fromStep string, err error) (RunResult, error) {
+	recordTransition(ctx, TransitionEvent{
+		RunID: runID, Workflow: workflowName, FromStep: fromStep, ToStep: "FAILED",
+		FailureReason: err.Error(),
+	})
+	return RunResult{}, err
 }
 
 // route resolves a step's next destination. Steps with an unconditional
@@ -357,11 +378,11 @@ func waitForHumanDecision(ctx workflow.Context) (HumanDecision, error) {
 	return decision, nil
 }
 
-func roleConfig(def workflowdef.Definition, roleName string) (harness, model string, params map[string]string) {
+func roleConfig(assignments map[string]workflowdef.Role, roleName string) (harness, model string, params map[string]string) {
 	if roleName == "" {
 		return "", "", nil
 	}
-	r := def.Roles[roleName]
+	r := assignments[roleName]
 	return r.Harness, r.Model, r.Params
 }
 

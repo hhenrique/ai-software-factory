@@ -29,7 +29,7 @@ func TestParseUnknownFieldFailsLoudly(t *testing.T) {
 	data := []byte(`
 workflow: bad
 version: 1
-roles: {}
+roles: []
 steps:
   - id: a
     type: tool

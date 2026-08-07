@@ -18,8 +18,9 @@ produce a Run. It is authored as data (YAML), not code, so that:
 - the definition can be statically validated before a Run starts
   (e.g. every cycle in the graph has a budget attached — no unbounded
   loops)
-- swapping a Role's backing harness/model is a one-line config change,
-  not a Workflow rewrite
+- swapping a Role's backing harness/model is a control-plane action
+  (internal/roleassignment), not a Workflow edit at all — see "Roles vs.
+  Workers" below
 
 ## MVP scope decision
 
@@ -41,14 +42,9 @@ starts a Run under this Workflow.
 workflow: <string, unique id>
 version: 1                      # static for MVP; see scope decision above
 
-roles:
-  <role_name>:
-    harness: <string>           # adapter identifier, see 03-roles-and-harness-contract.md
-    model: <string>
-    params:                     # optional; harness-invocation params beyond model
-      effort: <string>          # e.g. low | medium | high — adapter maps this to
-                                 # its own CLI convention (--effort, -c
-                                 # model_reasoning_effort=, --reasoning-effort, ...)
+roles: [<role_name>, ...]       # which of the fixed role set (see 03) this
+                                 # Workflow uses — no harness/model/params
+                                 # here; see "Roles vs. Workers" below
 
 budgets:
   <budget_name>:
@@ -77,13 +73,30 @@ steps:
 Terminal targets (`FAILED`, `COMPLETED`, `REVIEW_PENDING`, `CANCELLED`)
 reference the states defined in 01-run-state-machine.md, not step ids.
 
+## Roles vs. Workers
+
+`roles:` only declares which of the fixed role names (`planner`, `coder`,
+`reviewer` — see 03-roles-and-harness-contract.md) this Workflow uses; a
+step's `role:` field is validated against it exactly as before. The
+harness/model/params triad that used to live inline here is now a Worker
+(internal/workers), a persisted, control-plane-CRUD'd entity independent
+of any Workflow, and a separate mapping (internal/roleassignment) decides
+which Worker currently plays which role *for this Workflow* — edited from
+the Workflows view, takes effect on the next Run, no YAML edit or
+re-review needed. This is resolved once per Run at submission time
+(before `conductor.RunWorkflow` starts — see 05-architecture-temporal.md's
+determinism requirement) and is a hard failure if any declared role has
+no current assignment.
+
 ## Validation rules the conductor must enforce before saving a
 ## Workflow definition
 
 1. The graph is acyclic **except** where a cycle has a `budget`
    attached to at least one step in the cycle. An unbounded cycle is a
    hard validation error, not a runtime risk to discover later.
-2. Every `type: agent` step declares a `role` that exists in `roles`.
+2. Every `type: agent` step declares a `role` that exists in `roles`,
+   and every name in `roles` is itself one of the fixed role names (see
+   "Roles vs. Workers" above).
 3. Every `type: agent` step with an `output_schema` declares
    `on_malformed_output` — do not let malformed-output handling default
    silently.
@@ -104,10 +117,7 @@ see the note at the end.
 workflow: issue-to-pr-standard
 version: 1
 
-roles:
-  planner: { harness: claude-plan, model: sonnet-5-medium }
-  coder:   { harness: codex,       model: chatgpt-sol }
-  reviewer:{ harness: copilot-cli, model: auto }
+roles: [planner, coder, reviewer]
 
 budgets:
   verify_rounds: { max_attempts: 3 }
@@ -192,8 +202,7 @@ contract and the entire Coder/Reviewer loop:
 workflow: dependency-bump-minimal
 version: 1
 
-roles:
-  coder: { harness: codex, model: chatgpt-sol }
+roles: [coder]
 
 budgets:
   verify_rounds: { max_attempts: 2 }

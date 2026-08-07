@@ -293,21 +293,23 @@ view that would actually depend on `status` being accurate.
 
 #### Current state: `cmd/controlplane`, second slice
 
-Built as a read-only scan, no new persistence — a Workflow Definition is
-already checked-in YAML, so there's no user-entered data to store.
-`GET /api/workflows` scans `workflows/` (`internal/workflowdef` fixtures
-are reference/test definitions, not deployable ones — see that package's
-doc comment — and stay out of this scan), parses and validates each file
-the same way `cmd/submittask` already does before using one, and returns
-per-file: name, version, step count, its `roles:` block (name/harness/
-model), whether it declares a `trigger`, and pass/fail with the actual
-validation errors. A file that fails to parse or validate is still
-listed — invalid, with why — rather than silently dropped; the point is
-surfacing the problem. No id/version-hash/trigger-*config* display
-beyond what's listed above yet, and no way to activate/deactivate a
-Workflow from the UI (doc 02: Workflow Definitions aren't versioned
-beyond a single active definition + provenance hash in v1 to begin
-with).
+Built as a read-only scan for the YAML content itself — a Workflow
+Definition is already checked-in YAML, so there's no user-entered *step/
+DAG* data to store. `GET /api/workflows` scans `workflows/`
+(`internal/workflowdef` fixtures are reference/test definitions, not
+deployable ones — see that package's doc comment — and stay out of this
+scan), parses and validates each file the same way `cmd/submittask`
+already does before using one, and returns per-file: name, version, step
+count, its declared `roles:` (each enriched with its *current* Worker
+assignment from the database — see the Workers section below, this is the
+one piece of the response that isn't derived from the YAML file), whether
+it declares a `trigger`, and pass/fail with the actual validation errors.
+A file that fails to parse or validate is still listed — invalid, with
+why — rather than silently dropped; the point is surfacing the problem.
+No id/version-hash/trigger-*config* display beyond what's listed above
+yet, and no way to activate/deactivate a Workflow from the UI (doc 02:
+Workflow Definitions aren't versioned beyond a single active definition +
+provenance hash in v1 to begin with).
 
 This same endpoint backs the Repositories form's "Default workflow"
 combobox (added in that slice, before this one existed) — one scan, two
@@ -375,26 +377,36 @@ paused status.
 
 ### Workers (Roles)
 
-- List of configured roles (name, harness, model/endpoint)
-- Which Workflows reference each role (so changing a role's backing
-  model shows its blast radius)
+- List of configured Workers (name, harness, model/params), CRUD
+- Which (Workflow, role) pairs currently play each Worker (blast radius
+  of changing it)
 - Concurrency limits, if needed to avoid multiple Runs on the same repo
   causing merge-conflict storms — start with a simple per-repo
   concurrency cap, not a general scheduling system
 
-#### Current state: `cmd/controlplane`, third slice
+#### Current state: `cmd/controlplane`, real persistence (see docs/03's Role/Worker split)
 
-Built as a derived read-only view, same as Workflows — no standalone
-role registry, since roles live inline in each Workflow Definition's
-`roles:` block. `GET /api/workers` reuses the same `workflows/` scan as
-`GET /api/workflows` and aggregates every role usage by **(harness,
-model)**, not by role name: two workflows' "coder" roles pointing at the
-same harness/model are one blast-radius group even if named differently;
-the same role name in two workflows pointing at different models is not.
-That's the literal reading of "changing a role's backing model shows its
-blast radius" — the thing a config change actually touches is the
-(harness, model) pair, and each group lists every (Workflow, role name)
-using it.
+No longer a derived read-only view. A Worker (`internal/workers`, table
+`workers`) is a real CRUD entity — `GET/POST /api/workers`, `POST
+/api/workers/update`, `POST /api/workers/delete` — independent of any
+Workflow Definition. Which Worker plays which role for a given Workflow
+is a separate mapping (`internal/roleassignment`, table
+`role_assignments`, primary key `(workflow, role)`) — `GET/POST
+/api/role-assignments`, `POST /api/role-assignments/delete` — edited from
+the **Workflows** view (each row shows its declared roles, each with a
+picker over every configured Worker), not the Workers view, since "assign
+a Worker to a role" reads most naturally per-Workflow. The Workers view
+shows the reverse direction: each Worker's current usages, a direct
+`worker_id` foreign-key join now — deleting a Worker still referenced by
+a `role_assignments` row fails loudly (`workers.ErrInUse`) rather than
+silently orphaning a Workflow's role resolution.
+
+`GET /api/workflows`' per-role info (`RoleInfo`) is enriched with the
+current assignment (worker id/name/harness/model/params) on every
+request — a role with no current Worker shows as unassigned, a real,
+visible state (not an error in this view; `internal/taskintake.Submit` is
+what actually refuses to start a Run over it, via
+`internal/roleassignment.Resolve`).
 
 Concurrency limits are not surfaced — nothing in the system tracks or
 enforces them yet (this doc already called them "if needed"), so there's

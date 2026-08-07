@@ -26,6 +26,7 @@ import (
 	"factory/internal/activities/gitops"
 	"factory/internal/backlog"
 	"factory/internal/conductor"
+	"factory/internal/roleassignment"
 	"factory/internal/workflowdef"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -116,6 +117,18 @@ func Submit(ctx context.Context, deps Deps, params Params) (Result, error) {
 		return Result{}, fmt.Errorf("taskintake: %w", err)
 	}
 
+	// Resolved here, not inside conductor.RunWorkflow: RunWorkflow must
+	// stay a deterministic function of its RunInput (docs/05), same
+	// reason HarnessLimits is resolved before ExecuteWorkflow rather than
+	// looked up from inside the workflow. Failing here (before recording
+	// a Task or starting a Run) means an unassigned role never produces a
+	// half-started Run — same fail-before-any-side-effect posture as the
+	// workflow-file validation right above.
+	roleAssignments, err := roleassignment.Resolve(ctx, deps.Pool, def.Workflow, def.Roles)
+	if err != nil {
+		return Result{}, fmt.Errorf("taskintake: %w", err)
+	}
+
 	taskID, err := backlog.InsertHumanTask(ctx, deps.Pool, repoSlug, def.Workflow, description)
 	if err != nil {
 		return Result{}, err
@@ -134,10 +147,11 @@ func Submit(ctx context.Context, deps Deps, params Params) (Result, error) {
 		ID:        runID,
 		TaskQueue: deps.TaskQueue,
 	}, conductor.RunWorkflow, conductor.RunInput{
-		Definition:     *def,
-		InitialContext: map[string]any{"task_description": description},
-		Repo:           params.Repo,
-		HarnessLimits:  deps.HarnessLimits,
+		Definition:      *def,
+		InitialContext:  map[string]any{"task_description": description},
+		Repo:            params.Repo,
+		HarnessLimits:   deps.HarnessLimits,
+		RoleAssignments: roleAssignments,
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("taskintake: ExecuteWorkflow: %w", err)

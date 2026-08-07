@@ -28,18 +28,31 @@ func IsTerminalState(s string) bool {
 
 // Definition is the parsed form of a Workflow Definition YAML document.
 type Definition struct {
-	Workflow string            `yaml:"workflow"`
-	Version  int               `yaml:"version"`
-	Roles    map[string]Role   `yaml:"roles"`
-	Budgets  map[string]Budget `yaml:"budgets"`
-	Trigger  *Trigger          `yaml:"trigger,omitempty"`
-	Steps    []Step            `yaml:"steps"`
+	Workflow string `yaml:"workflow"`
+	Version  int    `yaml:"version"`
+
+	// Roles is just which of KnownRoles this workflow uses (e.g.
+	// [planner, coder, reviewer]) — no harness/model/params. Which Worker
+	// (harness/model/params triad) currently plays a role is resolved
+	// separately, from the control plane's persisted role_assignments
+	// (internal/roleassignment), once per Run at submission time, never
+	// parsed from this YAML. See docs/03-roles-and-harness-contract.md.
+	Roles   []string          `yaml:"roles"`
+	Budgets map[string]Budget `yaml:"budgets"`
+	Trigger *Trigger          `yaml:"trigger,omitempty"`
+	Steps   []Step            `yaml:"steps"`
 }
 
-// Role is a (harness, model) pair — see docs/03-roles-and-harness-contract.md.
+// Role is a resolved (harness, model, params) triad for one role, backed
+// by a persisted Worker (internal/workers) and the current
+// internal/roleassignment mapping — not YAML-parsed (no yaml tags; it
+// used to be the shape of Definition.Roles' map values before harness/
+// model/params moved out of the Workflow Definition into the control
+// plane). Reused here rather than duplicated as a separate type in
+// internal/conductor, which sets RunInput.RoleAssignments from this.
 type Role struct {
-	Harness string `yaml:"harness"`
-	Model   string `yaml:"model"`
+	Harness string
+	Model   string
 
 	// Params carries harness-invocation parameters that aren't the model
 	// itself — e.g. reasoning effort. Keys are canonical (adapter-agnostic)
@@ -49,7 +62,7 @@ type Role struct {
 	// "effort" is the only key defined so far — see
 	// internal/activities/harness's per-adapter files for how each one
 	// maps it.
-	Params map[string]string `yaml:"params,omitempty"`
+	Params map[string]string
 }
 
 // Budget bounds a loop in the graph. Zero value for a field means

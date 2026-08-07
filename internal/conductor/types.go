@@ -46,6 +46,17 @@ type RunInput struct {
 	// RunWorkflow itself, which must stay a deterministic function of its
 	// input.
 	HarnessLimits map[string]int
+
+	// RoleAssignments is the resolved harness/model/params triad for
+	// every role Definition.Roles declares, keyed by role name — the
+	// Worker currently assigned to play that role for this Workflow, at
+	// the moment the Run was submitted. Resolved once by whatever starts
+	// the Run (internal/roleassignment.Resolve) for exactly the same
+	// determinism reason as HarnessLimits: Definition.Roles itself is
+	// just role *names* now (docs/03), no longer harness/model/params, so
+	// this is the only source roleConfig has for that data inside
+	// RunWorkflow.
+	RoleAssignments map[string]workflowdef.Role
 }
 
 // Repo is a slice of doc 04's Repository entity: just enough to clone and
@@ -181,6 +192,13 @@ type TransitionEvent struct {
 	AttemptNumber int
 	TokenDelta    int
 	ActivityCalls int
+
+	// FailureReason is set only on the FAILED transition recordFailure
+	// emits for a hard Run failure (an Activity error, an unroutable
+	// outcome, ...) — "" for every ordinary transition. The human-readable
+	// error text, so a control-plane surface (docs/04's Work section) can
+	// show *why* a Run failed, not just that it did.
+	FailureReason string
 }
 
 // ActivityOutput is the normalized output every Activity this package

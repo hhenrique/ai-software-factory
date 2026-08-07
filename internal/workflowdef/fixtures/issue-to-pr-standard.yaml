@@ -1,10 +1,7 @@
 workflow: issue-to-pr-standard
 version: 1
 
-roles:
-  planner: { harness: claude-plan, model: sonnet-5-medium }
-  coder:   { harness: codex,       model: chatgpt-sol }
-  reviewer: { harness: copilot-cli, model: auto }
+roles: [planner, coder, reviewer]
 
 budgets:
   verify_rounds: { max_attempts: 3 }
