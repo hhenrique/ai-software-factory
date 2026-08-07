@@ -270,14 +270,15 @@ own doc comment for why it's a separate Workflow Definition from
 verify/review inner loops (two review rounds, each with a real finding
 addressed) before reaching `COMPLETED` and opening a real PR.
 
-Known gap: `backlog_tasks.status` only reflects "a Run was started"
-(`AttachRun` sets it to `RUNNING` and stops there) — nothing currently
-syncs it to the Run's actual terminal state (`COMPLETED`/`FAILED`/
-`CANCELLED`). The Run's real state lives in `run_events`, queryable by
-`run_id`; a Task row's `status` is not yet a reliable read of it. Closing
-this gap means either a periodic reconciliation pass or a callback from
-`RunWorkflow` itself — deferred until the Work section gets a real triage
-view that would actually depend on `status` being accurate.
+`backlog_tasks.status` is write-once (`AttachRun` sets it to `RUNNING`
+and stops there), so `internal/backlog.List` doesn't trust it once a
+`run_id` exists: a `LEFT JOIN LATERAL` pulls each Task's latest
+`run_events` transition and derives `status` from that instead —
+terminal states (`COMPLETED`/`FAILED`/`CANCELLED`/`REVIEW_PENDING`)
+shown as-is, anything else collapsed to `RUNNING` — falling back to the
+stored column only for a Task with no `run_id`/no events yet. No
+reconciliation pass or `RunWorkflow` callback needed; the read derives
+the truth live instead of caching a copy that can go stale.
 
 ### Workflows
 
