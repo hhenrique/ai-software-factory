@@ -320,3 +320,28 @@ This is a deliberate trade-off: repeatedly resetting via hints could in
 principle be used to route around oscillation/deadlock detection
 indefinitely. It's accepted because a human has to spend attention on each
 reset — this is not a free retry, unlike an automatic budget bump would be.
+
+## Near future, not built yet: interactive drop-in on a blocked Run
+
+Idea, not decided — recorded to discuss when it's time to work on it, not
+a committed design. Today a human at `REVIEW_PENDING` only sees the
+escalation reason plus whatever hint field the Inbox exposes (resume-step
++ free-text hint); resolving it is a one-shot decision with no back-and-forth.
+
+The want: from the Inbox, "drop in" on a blocked Run — interactively,
+*if possible* (feasibility genuinely open, not assumed). Concrete example:
+a Coder escalates a disputed review finding, and instead of resolving it
+blind from the finding text alone, a human opens a chat with that same
+Coder — same context, same session — to ask clarifying questions before
+deciding how to resume. Proposed mechanism: restore the harness's
+underlying agent session (not replay a fresh call with reconstructed
+context) and expose it through a chat UI, rather than only the current
+resume-step/hint form.
+
+Open questions for whenever this gets picked up (not resolved here):
+whether every harness in doc03's adapter contract can even support a
+resumable session, versus this only being possible for some; whether a
+drop-in conversation should be able to trigger new tool calls/cost or
+stay read-only/advisory; how (or whether) anything said in the chat
+becomes part of the Run's structured trace rather than a side-channel
+lost after the decision is made.
