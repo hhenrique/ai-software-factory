@@ -61,9 +61,36 @@ function setupSidebarToggle() {
   });
 }
 
+// applyThemeMode sets the "Slate Tech" theme's mode (.sketchpad/ui/themes.html
+// — dark is the CSS default, data-mode="light" on <html> is the override).
+// The button shows the mode a click would switch TO, not the current one.
+function applyThemeMode(mode) {
+  if (mode === "light") {
+    document.documentElement.setAttribute("data-mode", "light");
+  } else {
+    document.documentElement.removeAttribute("data-mode");
+  }
+  const toggle = document.getElementById("theme-toggle");
+  toggle.textContent = mode === "light" ? "\u{1F319}" : "☀️";
+  toggle.title = mode === "light" ? "Switch to dark theme" : "Switch to light theme";
+  toggle.setAttribute("aria-label", toggle.title);
+}
+
+function setupThemeToggle() {
+  const toggle = document.getElementById("theme-toggle");
+  const mode = localStorage.getItem("cp-theme-mode") === "light" ? "light" : "dark";
+  applyThemeMode(mode);
+  toggle.addEventListener("click", () => {
+    const next = document.documentElement.getAttribute("data-mode") === "light" ? "dark" : "light";
+    applyThemeMode(next);
+    localStorage.setItem("cp-theme-mode", next);
+  });
+}
+
 window.addEventListener("hashchange", renderView);
 window.addEventListener("DOMContentLoaded", () => {
   setupSidebarToggle();
+  setupThemeToggle();
   renderView();
 });
 

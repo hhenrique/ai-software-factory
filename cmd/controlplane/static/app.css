@@ -5,14 +5,19 @@
    and layout (sidebar/topbar/content grid) is separated from component
    styling (cards/lists/forms/buttons) so either can change independently. */
 
+/* Theme: "Slate Tech" (.sketchpad/ui/themes.html) — the palette chosen
+   after comparing it against Warm Minimalist and True Monochromatic.
+   Dark is the default mode (matches the look this app shipped with
+   before theming existed); data-mode="light" on <html>, toggled by
+   app.js and persisted in localStorage, switches to the light variant. */
 :root {
-  --color-bg: #0b0b0d;
-  --color-surface: #17171a;
-  --color-surface-raised: #1e1e22;
-  --color-border: #2a2a2f;
-  --color-text: #e8e8ea;
-  --color-text-muted: #9a9aa2;
-  --color-accent: #e8e8ea;
+  --color-bg: #0f172a;
+  --color-surface: #1e293b;
+  --color-surface-raised: #263a52;
+  --color-border: #334155;
+  --color-text: #f8fafc;
+  --color-text-muted: #94a3b8;
+  --color-accent: #60a5fa;
   --color-positive: #3ecf6e;
   --color-negative: #e5533d;
 
@@ -31,6 +36,18 @@
   --sidebar-width-collapsed: 56px;
 }
 
+:root[data-mode="light"] {
+  --color-bg: #f8fafc;
+  --color-surface: #ffffff;
+  --color-surface-raised: #f1f5f9;
+  --color-border: #e2e8f0;
+  --color-text: #0f172a;
+  --color-text-muted: #64748b;
+  --color-accent: #3b82f6;
+  --color-positive: #16a34a;
+  --color-negative: #dc2626;
+}
+
 * { box-sizing: border-box; }
 
 html, body {
@@ -43,6 +60,7 @@ body {
   color: var(--color-text);
   font-family: var(--font-sans);
   font-size: 14px;
+  transition: background-color 150ms ease, color 150ms ease;
 }
 
 /* ---- layout ---- */
@@ -150,6 +168,24 @@ body {
   justify-content: space-between;
   padding: var(--space-4) var(--space-6);
   border-bottom: 1px solid var(--color-border);
+}
+
+.theme-toggle {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  border-radius: var(--radius);
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.theme-toggle:hover {
+  color: var(--color-text);
+  border-color: var(--color-text-muted);
 }
 
 .topbar-title {
