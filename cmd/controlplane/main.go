@@ -106,6 +106,7 @@ func main() {
 	mux.HandleFunc("POST /api/repositories/delete", deleteRepositoryHandler(pool))
 	mux.HandleFunc("GET /api/workflows", listWorkflowsHandler(d.workflowsDir, pool))
 	mux.HandleFunc("GET /api/workflow-graph", workflowGraphHandler(d.workflowsDir))
+	mux.HandleFunc("GET /api/harnesses", listHarnessesHandler)
 	mux.HandleFunc("GET /api/workers", listWorkersHandler(pool))
 	mux.HandleFunc("POST /api/workers", createWorkerHandler(pool))
 	mux.HandleFunc("POST /api/workers/update", updateWorkerHandler(pool))
@@ -333,6 +334,17 @@ type WorkerInfo struct {
 type RoleUsage struct {
 	Workflow string `json:"workflow"`
 	Role     string `json:"role"`
+}
+
+// listHarnessesHandler returns internal/workers.KnownHarnesses — the
+// Workers view's harness field is a combobox built from this, not free
+// text, so a typo (found live: "copilot" saved before the identifier was
+// renamed from "copilot-cli" to "copilot") can't be entered at all,
+// rather than only failing once Create/Update's own validation (or,
+// before that existed, a real Run) catches it. One source of truth: this
+// package never hand-maintains a second copy of the list.
+func listHarnessesHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, workers.KnownHarnesses)
 }
 
 // listWorkersHandler lists every persisted Worker enriched with its

@@ -40,11 +40,13 @@ var ErrNotFound = errors.New("workers: not found")
 //
 // Validated at Create/Update time so a typo fails immediately, not deep
 // inside a real Run after real work already happened. Found live: a
-// Worker saved with harness "copilot" (the actual registered identifier
-// is "copilot-cli") only failed once a Run's Reviewer step reached
-// harness.invoke — after provision/plan/execute had already run for
-// real.
-var KnownHarnesses = []string{"claude-code", "claude-plan", "codex", "copilot-cli"}
+// Worker saved with harness "copilot" only failed once a Run's Reviewer
+// step reached harness.invoke — after provision/plan/execute had already
+// run for real — because the registered identifier was "copilot-cli" at
+// the time (since renamed to "copilot" to match what a human actually
+// types; "claude-plan", a same-behavior alias for "claude-code", was
+// removed the same round for the same reason: fewer ways to guess wrong).
+var KnownHarnesses = []string{"claude-code", "codex", "copilot"}
 
 // ErrUnknownHarness is returned by Create/Update when harness isn't one
 // of KnownHarnesses.

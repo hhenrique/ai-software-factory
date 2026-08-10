@@ -3,7 +3,7 @@
 # docs/tests, see internal/workflowdef/fixtures.go). This one exists
 # because the factory's only currently-licensed harness is Claude Code:
 # issue-to-pr-standard's example Worker assignments (Coder = codex,
-# Reviewer = copilot-cli) can't run for real without those CLIs' own
+# Reviewer = copilot) can't run for real without those CLIs' own
 # credits. Same DAG, same budgets, same schemas as issue-to-pr-standard —
 # which harness/model backs each role isn't declared here at all anymore
 # (see roles: below and 03-roles-and-harness-contract.md): it's whichever

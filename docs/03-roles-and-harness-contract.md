@@ -38,9 +38,9 @@ Example of a current assignment set:
 
 | Workflow | Role | Worker (harness / model) |
 |---|---|---|
-| issue-to-pr-standard | planner | claude-plan / sonnet-5-medium |
+| issue-to-pr-standard | planner | claude-code / sonnet-5-medium |
 | issue-to-pr-standard | coder | codex / chatgpt-sol |
-| issue-to-pr-standard | reviewer | copilot-cli / auto |
+| issue-to-pr-standard | reviewer | copilot / auto |
 
 Changing a role's backing Worker (or a Worker's own harness/model) is a
 control-plane action, not a Workflow edit, because steps reference the

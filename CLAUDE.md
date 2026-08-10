@@ -64,7 +64,7 @@ general-purpose SaaS product.
   the Run state machine), not something a Workflow invents. A step
   references a role by name only, never a harness/model directly.
 - **Worker** — the `(harness, model, params)` triad a Role is played by
-  (e.g. claude-plan + sonnet-5-medium; codex + a coding model; a
+  (e.g. claude-code + sonnet-5-medium; codex + a coding model; a
   review-focused harness). Persisted, control-plane-CRUD'd
   (`internal/workers`), independent of any Workflow. Which Worker plays
   which Role *for a given Workflow* is a separate mapping

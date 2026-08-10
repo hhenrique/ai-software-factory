@@ -58,17 +58,11 @@ type adapter interface {
 	invoke(ctx context.Context, inv invocation) (invocationResult, error)
 }
 
-// adapters is the harness-identifier -> adapter dispatch table. claude-plan
-// is an alias for claude-code: doc 02's reference issue-to-pr-standard
-// example uses "claude-plan" for the Planner role, and this package
-// doesn't need a functionally distinct adapter for "Claude used in plan
-// mode" vs. "Claude used generally" — the prompt differs, not the CLI
-// invocation.
+// adapters is the harness-identifier -> adapter dispatch table.
 var adapters = map[string]adapter{
 	"claude-code": claudeAdapter{},
-	"claude-plan": claudeAdapter{},
 	"codex":       codexAdapter{},
-	"copilot-cli": copilotAdapter{},
+	"copilot":     copilotAdapter{},
 }
 
 // Invoke normalizes input from in.Context (doc 03: this is where any

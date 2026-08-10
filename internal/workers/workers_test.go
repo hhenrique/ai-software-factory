@@ -48,15 +48,18 @@ func cleanupWorker(t *testing.T, pool *pgxpool.Pool, id int64) {
 }
 
 // TestCreateRejectsUnknownHarness is a regression test for a real bug: a
-// Worker saved with harness "copilot" (the actual registered identifier
-// is "copilot-cli") only failed once a real Run's Reviewer step reached
-// harness.invoke, after provision/plan/execute had already run for real.
-// Create must reject it immediately instead.
+// Worker saved with an unregistered harness identifier only failed once a
+// real Run's Reviewer step reached harness.invoke, after
+// provision/plan/execute had already run for real. Create must reject it
+// immediately instead. "copilot-cli" is deliberately used here (not just
+// an arbitrary typo): it's the identifier this package itself used before
+// being renamed to match the actual CLI binary name ("copilot") — the
+// exact kind of stale/renamed value this validation exists to catch.
 func TestCreateRejectsUnknownHarness(t *testing.T) {
 	pool := requirePool(t)
 	ctx := context.Background()
 
-	_, err := Create(ctx, pool, uniqueName(t), "copilot", "sonnet", nil)
+	_, err := Create(ctx, pool, uniqueName(t), "copilot-cli", "sonnet", nil)
 	if !errors.Is(err, ErrUnknownHarness) {
 		t.Fatalf("Create: err = %v, want ErrUnknownHarness", err)
 	}
@@ -72,7 +75,7 @@ func TestUpdateRejectsUnknownHarness(t *testing.T) {
 	}
 	cleanupWorker(t, pool, created.ID)
 
-	_, err = Update(ctx, pool, created.ID, created.Name, "copilot", "sonnet", nil)
+	_, err = Update(ctx, pool, created.ID, created.Name, "copilot-cli", "sonnet", nil)
 	if !errors.Is(err, ErrUnknownHarness) {
 		t.Fatalf("Update: err = %v, want ErrUnknownHarness", err)
 	}

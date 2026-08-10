@@ -164,6 +164,25 @@ function populateWorkflowSelect(select, infos, selected) {
   select.value = selected || "";
 }
 
+// populateHarnessSelect fills a <select> from /api/harnesses (backed by
+// internal/workers.KnownHarnesses) — the Workers view's harness field, so
+// only a registered identifier can ever be entered (found live: a Worker
+// saved with a plausible-but-wrong harness string only failed once a
+// real Run reached it, after real work already happened). No "(none)"
+// option, unlike populateWorkflowSelect above: harness is required, and
+// defaulting to the first real entry means a human never has to make a
+// meaningless choice just to get past validation.
+function populateHarnessSelect(select, harnesses, selected) {
+  select.innerHTML = "";
+  for (const harness of harnesses) {
+    const option = document.createElement("option");
+    option.value = harness;
+    option.textContent = harness;
+    select.appendChild(option);
+  }
+  select.value = selected || harnesses[0] || "";
+}
+
 // ---- shared graph-view scaffold (workflow_v1/v2/v3) ----
 
 // buildGraphViewShell is the common chrome every visualization prototype
@@ -801,7 +820,7 @@ function renderWorkers(container) {
       </div>
       <div class="field">
         <label for="wf-harness">Harness</label>
-        <input id="wf-harness" type="text" placeholder="e.g. claude-code">
+        <select id="wf-harness"><option value="">(loading...)</option></select>
       </div>
       <div class="field">
         <label for="wf-model">Model</label>
@@ -835,6 +854,17 @@ function renderWorkers(container) {
   wrap.appendChild(hint);
 
   container.appendChild(wrap);
+
+  // Fetched once and reused by both the add-form select and every
+  // per-row edit-form select (populateHarnessSelect), same pattern as
+  // the Inbox/Work views' workflowsReady — one fetch, not one per row.
+  let harnesses = [];
+  const harnessesReady = apiRequest("/api/harnesses")
+    .then((list) => {
+      harnesses = list || [];
+      populateHarnessSelect(document.getElementById("wf-harness"), harnesses, "");
+    })
+    .catch(showError);
 
   async function refresh() {
     clearError();
@@ -959,7 +989,7 @@ function renderWorkers(container) {
       </div>
       <div class="field">
         <label>Harness</label>
-        <input type="text" class="edit-harness">
+        <select class="edit-harness"><option value="">(loading...)</option></select>
       </div>
       <div class="field">
         <label>Model</label>
@@ -978,7 +1008,16 @@ function renderWorkers(container) {
     const modelInput = editForm.querySelector(".edit-model");
     const effortInput = editForm.querySelector(".edit-effort");
     nameInput.value = worker.name;
-    harnessInput.value = worker.harness;
+    // worker.harness may be a value KnownHarnesses no longer lists (an
+    // older row, or one the DB happens to hold outside the current set) —
+    // populateHarnessSelect still needs *an* option to select, so add it
+    // explicitly rather than silently falling back to the list's first
+    // entry and misrepresenting what's actually saved.
+    harnessesReady.then(() => {
+      let options = harnesses;
+      if (!options.includes(worker.harness)) options = [worker.harness, ...options];
+      populateHarnessSelect(harnessInput, options, worker.harness);
+    });
     modelInput.value = worker.model;
     effortInput.value = (worker.params && worker.params.effort) || "";
 
@@ -1048,7 +1087,9 @@ function renderWorkers(container) {
         }),
       });
       document.getElementById("wf-name").value = "";
-      document.getElementById("wf-harness").value = "";
+      // Harness deliberately left as-is (not reset) — a select with no
+      // "(none)" option, and the common case is adding several Workers
+      // in a row with the same harness, different models/effort.
       document.getElementById("wf-model").value = "";
       document.getElementById("wf-effort").value = "";
       await refresh();
