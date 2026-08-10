@@ -391,6 +391,10 @@ func createWorkerHandler(pool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 		worker, err := workers.Create(r.Context(), pool, req.Name, req.Harness, req.Model, req.Params)
+		if errors.Is(err, workers.ErrUnknownHarness) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -424,6 +428,10 @@ func updateWorkerHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		worker, err := workers.Update(r.Context(), pool, req.ID, req.Name, req.Harness, req.Model, req.Params)
 		if errors.Is(err, workers.ErrNotFound) {
 			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, workers.ErrUnknownHarness) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		if err != nil {

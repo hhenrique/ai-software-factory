@@ -29,6 +29,36 @@ const foreignKeyViolationCode = "23503"
 // given id.
 var ErrNotFound = errors.New("workers: not found")
 
+// KnownHarnesses is the fixed set of harness identifiers a Worker's
+// Harness field must be one of — the exact strings
+// internal/activities/harness's adapter dispatch table recognizes (see
+// that package's TestAdaptersMatchKnownHarnesses, which cross-checks the
+// two lists match; this package can't import activities/harness itself
+// to derive the list directly — that's an edge implementation of the
+// harness adapter contract (doc03), and depending on it from here would
+// invert the dependency direction).
+//
+// Validated at Create/Update time so a typo fails immediately, not deep
+// inside a real Run after real work already happened. Found live: a
+// Worker saved with harness "copilot" (the actual registered identifier
+// is "copilot-cli") only failed once a Run's Reviewer step reached
+// harness.invoke — after provision/plan/execute had already run for
+// real.
+var KnownHarnesses = []string{"claude-code", "claude-plan", "codex", "copilot-cli"}
+
+// ErrUnknownHarness is returned by Create/Update when harness isn't one
+// of KnownHarnesses.
+var ErrUnknownHarness = errors.New("workers: unknown harness")
+
+func isKnownHarness(h string) bool {
+	for _, k := range KnownHarnesses {
+		if h == k {
+			return true
+		}
+	}
+	return false
+}
+
 // Worker is one configured (harness, model, params) triad — see
 // docs/03-roles-and-harness-contract.md. Name is a free-text label (e.g.
 // "Sonnet — high effort"), the identity a human picks it by in the
@@ -90,6 +120,9 @@ func Get(ctx context.Context, pool *pgxpool.Pool, id int64) (Worker, error) {
 // real conflict, reported as-is rather than silently upserting, same
 // convention as internal/repositories.Insert.
 func Create(ctx context.Context, pool *pgxpool.Pool, name, harness, model string, params map[string]string) (Worker, error) {
+	if !isKnownHarness(harness) {
+		return Worker{}, fmt.Errorf("workers: create %q: harness %q must be one of %v: %w", name, harness, KnownHarnesses, ErrUnknownHarness)
+	}
 	if params == nil {
 		params = map[string]string{}
 	}
@@ -113,6 +146,9 @@ func Create(ctx context.Context, pool *pgxpool.Pool, name, harness, model string
 // without touching a single role_assignments row. ErrNotFound if id
 // isn't registered.
 func Update(ctx context.Context, pool *pgxpool.Pool, id int64, name, harness, model string, params map[string]string) (Worker, error) {
+	if !isKnownHarness(harness) {
+		return Worker{}, fmt.Errorf("workers: update %d: harness %q must be one of %v: %w", id, harness, KnownHarnesses, ErrUnknownHarness)
+	}
 	if params == nil {
 		params = map[string]string{}
 	}

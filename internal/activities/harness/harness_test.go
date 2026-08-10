@@ -4,11 +4,43 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
 	"factory/internal/conductor"
+	"factory/internal/workers"
 )
+
+// TestAdaptersMatchKnownHarnesses guards against the two lists drifting:
+// internal/workers.KnownHarnesses is what a Worker's harness field is
+// validated against at Create/Update time (fail fast, before any Run
+// wastes real work reaching harness.invoke's own runtime lookup — found
+// live: a Worker saved with harness "copilot" only failed once a real
+// Run's Reviewer step got there, after provision/plan/execute had
+// already run for real). workers can't import this package to derive the
+// list directly (that would invert the dependency: this package is an
+// edge implementation of doc03's harness adapter contract, workers is
+// core domain), so this test is what keeps them in sync instead — add an
+// adapter here, add it to workers.KnownHarnesses too, or this fails.
+func TestAdaptersMatchKnownHarnesses(t *testing.T) {
+	var got []string
+	for name := range adapters {
+		got = append(got, name)
+	}
+	want := append([]string(nil), workers.KnownHarnesses...)
+	sort.Strings(got)
+	sort.Strings(want)
+
+	if len(got) != len(want) {
+		t.Fatalf("adapters = %v, workers.KnownHarnesses = %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("adapters = %v, workers.KnownHarnesses = %v", got, want)
+		}
+	}
+}
 
 // writeFakeCLI installs a fake `name` executable on PATH (prepended,
 // restored after the test) that: records its argv to $FAKE_CLI_ARGV_FILE

@@ -47,6 +47,54 @@ func cleanupWorker(t *testing.T, pool *pgxpool.Pool, id int64) {
 	})
 }
 
+// TestCreateRejectsUnknownHarness is a regression test for a real bug: a
+// Worker saved with harness "copilot" (the actual registered identifier
+// is "copilot-cli") only failed once a real Run's Reviewer step reached
+// harness.invoke, after provision/plan/execute had already run for real.
+// Create must reject it immediately instead.
+func TestCreateRejectsUnknownHarness(t *testing.T) {
+	pool := requirePool(t)
+	ctx := context.Background()
+
+	_, err := Create(ctx, pool, uniqueName(t), "copilot", "sonnet", nil)
+	if !errors.Is(err, ErrUnknownHarness) {
+		t.Fatalf("Create: err = %v, want ErrUnknownHarness", err)
+	}
+}
+
+func TestUpdateRejectsUnknownHarness(t *testing.T) {
+	pool := requirePool(t)
+	ctx := context.Background()
+
+	created, err := Create(ctx, pool, uniqueName(t), "claude-code", "sonnet", nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	cleanupWorker(t, pool, created.ID)
+
+	_, err = Update(ctx, pool, created.ID, created.Name, "copilot", "sonnet", nil)
+	if !errors.Is(err, ErrUnknownHarness) {
+		t.Fatalf("Update: err = %v, want ErrUnknownHarness", err)
+	}
+}
+
+// TestCreateAcceptsEveryKnownHarness guards the other direction: every
+// identifier internal/activities/harness actually dispatches to
+// (TestAdaptersMatchKnownHarnesses keeps that list in sync with this
+// one) must be accepted here, not just "claude-code".
+func TestCreateAcceptsEveryKnownHarness(t *testing.T) {
+	pool := requirePool(t)
+	ctx := context.Background()
+
+	for _, harness := range KnownHarnesses {
+		created, err := Create(ctx, pool, uniqueName(t), harness, "some-model", nil)
+		if err != nil {
+			t.Fatalf("Create(harness=%q): %v", harness, err)
+		}
+		cleanupWorker(t, pool, created.ID)
+	}
+}
+
 func TestCreateThenGetRoundTripsParams(t *testing.T) {
 	pool := requirePool(t)
 	ctx := context.Background()
@@ -163,7 +211,7 @@ func TestUpdateUnknownIDReturnsErrNotFound(t *testing.T) {
 	pool := requirePool(t)
 	ctx := context.Background()
 
-	_, err := Update(ctx, pool, -1, "x", "y", "z", nil)
+	_, err := Update(ctx, pool, -1, "x", "claude-code", "z", nil)
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Update: err = %v, want ErrNotFound", err)
 	}
