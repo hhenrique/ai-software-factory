@@ -105,11 +105,14 @@ func Submit(ctx context.Context, deps Deps, params Params) (Result, error) {
 	}
 
 	description := params.Description
+	var sourceRef backlog.SourceRef
 	if params.GitHubIssue != 0 {
-		description, err = fetchGitHubIssue(repoSlug, params.GitHubIssue)
+		issue, err := fetchGitHubIssue(repoSlug, params.GitHubIssue)
 		if err != nil {
 			return Result{}, err
 		}
+		description = formatIssueDescription(issue)
+		sourceRef = backlog.SourceRef{Kind: "github_issue", Ref: issue.URL}
 	}
 
 	def, err := parseAndValidateWorkflowFile(workflowFile)
@@ -129,7 +132,7 @@ func Submit(ctx context.Context, deps Deps, params Params) (Result, error) {
 		return Result{}, fmt.Errorf("taskintake: %w", err)
 	}
 
-	taskID, err := backlog.InsertHumanTask(ctx, deps.Pool, repoSlug, def.Workflow, description)
+	taskID, err := backlog.InsertHumanTask(ctx, deps.Pool, repoSlug, def.Workflow, description, sourceRef)
 	if err != nil {
 		return Result{}, err
 	}
@@ -152,6 +155,7 @@ func Submit(ctx context.Context, deps Deps, params Params) (Result, error) {
 		Repo:            params.Repo,
 		HarnessLimits:   deps.HarnessLimits,
 		RoleAssignments: roleAssignments,
+		SourceRef:       conductor.SourceRef{Kind: sourceRef.Kind, Ref: sourceRef.Ref},
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("taskintake: ExecuteWorkflow: %w", err)
@@ -182,26 +186,35 @@ func parseAndValidateWorkflowFile(path string) (*workflowdef.Definition, error) 
 	return def, nil
 }
 
+// githubIssue is `gh issue view`'s relevant JSON fields.
+type githubIssue struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+	URL   string `json:"url"`
+}
+
 // fetchGitHubIssue shells out to `gh issue view` (same established pattern
-// as internal/activities/pr — gh already owns GitHub auth) and folds the
-// issue's title/body/URL into one task description string.
-func fetchGitHubIssue(repoSlug string, number int) (string, error) {
+// as internal/activities/pr — gh already owns GitHub auth).
+func fetchGitHubIssue(repoSlug string, number int) (githubIssue, error) {
 	out, err := exec.Command("gh", "issue", "view", fmt.Sprint(number),
 		"--repo", repoSlug, "--json", "title,body,url").Output()
 	if err != nil {
-		return "", fmt.Errorf("gh issue view %d --repo %s: %w", number, repoSlug, err)
+		return githubIssue{}, fmt.Errorf("gh issue view %d --repo %s: %w", number, repoSlug, err)
 	}
 
-	var issue struct {
-		Title string `json:"title"`
-		Body  string `json:"body"`
-		URL   string `json:"url"`
-	}
+	var issue githubIssue
 	if err := json.Unmarshal(out, &issue); err != nil {
-		return "", fmt.Errorf("gh issue view %d: parse JSON: %w", number, err)
+		return githubIssue{}, fmt.Errorf("gh issue view %d: parse JSON: %w", number, err)
 	}
+	return issue, nil
+}
 
-	return fmt.Sprintf("%s\n\n%s\n\nSource: %s", issue.Title, issue.Body, issue.URL), nil
+// formatIssueDescription folds a fetched issue's title/body/URL into one
+// task description string — good for a human or an agent to read. The URL
+// also lives structurally in Task.SourceRef now (see Submit), which is
+// what a tool step re-targets a comment at.
+func formatIssueDescription(issue githubIssue) string {
+	return fmt.Sprintf("%s\n\n%s\n\nSource: %s", issue.Title, issue.Body, issue.URL)
 }
 
 // generateRunID builds a readable, collision-resistant Run id — unlike

@@ -9,6 +9,7 @@ package backlog
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -60,6 +61,14 @@ func (a *Activities) CreateTask(ctx context.Context, in conductor.ActivityInput)
 	}, nil
 }
 
+// SourceRef is a structured pointer back to where a Task originated (doc
+// 08: "a real structured field ... set once at Task creation and never
+// mutated afterward"). Kind "" means no known source — a free-text Task.
+type SourceRef struct {
+	Kind string `json:"kind,omitempty"` // "github_issue" | "aha_idea" | ""
+	Ref  string `json:"ref,omitempty"`  // issue URL, Aha! idea id/reference
+}
+
 // InsertHumanTask records a manually-submitted Task (source: "human")
 // before its Run starts — called directly by whatever intake surface
 // accepts one (cmd/submittask), not via an Activity: unlike CreateTask
@@ -69,12 +78,12 @@ func (a *Activities) CreateTask(ctx context.Context, in conductor.ActivityInput)
 // no decoupled scheduler (doc 00's "bespoke scheduling engine" is
 // explicitly deferred), so a submitted Task's Run is started immediately
 // after this call, not queued for later pickup — see AttachRun.
-func InsertHumanTask(ctx context.Context, pool *pgxpool.Pool, targetRepo, workflow, description string) (taskID string, err error) {
+func InsertHumanTask(ctx context.Context, pool *pgxpool.Pool, targetRepo, workflow, description string, sourceRef SourceRef) (taskID string, err error) {
 	err = pool.QueryRow(ctx, `
-		INSERT INTO backlog_tasks (task_id, source, target_repo, workflow, description, status)
-		VALUES (gen_random_uuid()::text, 'human', $1, $2, $3, 'QUEUED')
+		INSERT INTO backlog_tasks (task_id, source, target_repo, workflow, description, status, source_ref_kind, source_ref_ref)
+		VALUES (gen_random_uuid()::text, 'human', $1, $2, $3, 'QUEUED', $4, $5)
 		RETURNING task_id
-	`, targetRepo, workflow, description).Scan(&taskID)
+	`, targetRepo, workflow, description, sourceRef.Kind, sourceRef.Ref).Scan(&taskID)
 	if err != nil {
 		return "", fmt.Errorf("backlog: insert human task: %w", err)
 	}
@@ -97,12 +106,23 @@ type Task struct {
 	Description string    `json:"description,omitempty"`
 	Status      string    `json:"status"`
 	CreatedAt   time.Time `json:"created_at"`
+	SourceRef   SourceRef `json:"source_ref"`
 
 	// FailureReason is the error text from the run_events row that set
 	// Status to FAILED (conductor.recordFailure) — "" whenever Status
 	// isn't FAILED, or for a FAILED Task predating that fix (an already-
 	// recorded FAILED transition with no reason attached).
 	FailureReason string `json:"failure_reason,omitempty"`
+
+	// Outcome/Summary mirror internal/inbox.PendingRun's fields of the
+	// same name: the latest transition's routing outcome and a rendered
+	// verdict/scope_contract/findings/diff summary — so the Work view can
+	// show *why* a Task's Run is sitting in REVIEW_PENDING (or what its
+	// last step actually did) without a human needing to separately open
+	// the Inbox or read Temporal's raw history (doc04's "full trace/
+	// replay per Run" is non-negotiable even for a minimal build).
+	Outcome string `json:"outcome,omitempty"`
+	Summary string `json:"summary,omitempty"`
 }
 
 // List returns every backlog Task, most recently created first — backs
@@ -124,10 +144,11 @@ func List(ctx context.Context, pool *pgxpool.Pool) ([]Task, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT bt.task_id, coalesce(bt.run_id, ''), coalesce(bt.target_repo, ''), coalesce(bt.workflow, ''),
 		       bt.source, coalesce(bt.description, ''), bt.status, bt.created_at,
-		       latest.to_step, latest.failure_reason
+		       bt.source_ref_kind, bt.source_ref_ref,
+		       latest.to_step, latest.failure_reason, latest.outcome, latest.produced
 		FROM backlog_tasks bt
 		LEFT JOIN LATERAL (
-			SELECT to_step, failure_reason FROM run_events
+			SELECT to_step, failure_reason, outcome, produced FROM run_events
 			WHERE run_events.run_id = bt.run_id
 			ORDER BY occurred_at DESC, id DESC LIMIT 1
 		) latest ON true
@@ -141,9 +162,11 @@ func List(ctx context.Context, pool *pgxpool.Pool) ([]Task, error) {
 	var out []Task
 	for rows.Next() {
 		var t Task
-		var latestToStep, failureReason sql.NullString
+		var latestToStep, failureReason, outcome sql.NullString
+		var producedJSON []byte
 		if err := rows.Scan(&t.TaskID, &t.RunID, &t.TargetRepo, &t.Workflow, &t.Source, &t.Description, &t.Status, &t.CreatedAt,
-			&latestToStep, &failureReason); err != nil {
+			&t.SourceRef.Kind, &t.SourceRef.Ref,
+			&latestToStep, &failureReason, &outcome, &producedJSON); err != nil {
 			return nil, fmt.Errorf("backlog: list: scan: %w", err)
 		}
 		if latestToStep.Valid && latestToStep.String != "" {
@@ -157,6 +180,14 @@ func List(ctx context.Context, pool *pgxpool.Pool) ([]Task, error) {
 		}
 		if t.Status == "FAILED" {
 			t.FailureReason = failureReason.String
+		}
+		t.Outcome = outcome.String
+		if len(producedJSON) > 0 {
+			var produced map[string]any
+			if err := json.Unmarshal(producedJSON, &produced); err != nil {
+				return nil, fmt.Errorf("backlog: list: unmarshal produced for task %q: %w", t.TaskID, err)
+			}
+			t.Summary = conductor.FormatEventContent(produced)
 		}
 		out = append(out, t)
 	}

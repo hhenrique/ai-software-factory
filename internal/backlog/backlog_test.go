@@ -2,8 +2,12 @@ package backlog
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"factory/internal/conductor"
 	"factory/internal/eventlog"
@@ -29,6 +33,18 @@ func requirePool(t *testing.T) *Activities {
 	return &Activities{Pool: pool}
 }
 
+// cleanupTask registers a best-effort delete of a backlog_tasks row once
+// the test ends — internal/backlog has no exported Delete (this is
+// test-only cleanup via direct SQL), so every test in this file that
+// inserts a real row must call this, so the control plane's Work view
+// never accumulates rows from routine `go test` runs.
+func cleanupTask(t *testing.T, pool *pgxpool.Pool, taskID string) {
+	t.Helper()
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM backlog_tasks WHERE task_id = $1`, taskID)
+	})
+}
+
 func TestCreateTaskInsertsRowAndReturnsID(t *testing.T) {
 	a := requirePool(t)
 	ctx := context.Background()
@@ -49,6 +65,7 @@ func TestCreateTaskInsertsRowAndReturnsID(t *testing.T) {
 	if taskID == "" {
 		t.Fatalf("expected spawned_task_id in Produced, got %+v", out.Produced)
 	}
+	cleanupTask(t, a.Pool, taskID)
 
 	var gotRunID, gotSource, gotStatus string
 	err = a.Pool.QueryRow(ctx,
@@ -80,6 +97,7 @@ func TestCreateTaskDefaultsSourceWhenMissing(t *testing.T) {
 		t.Fatalf("CreateTask: %v", err)
 	}
 	taskID, _ := out.Produced["spawned_task_id"].(string)
+	cleanupTask(t, a.Pool, taskID)
 
 	var gotSource string
 	if err := a.Pool.QueryRow(ctx, `SELECT source FROM backlog_tasks WHERE task_id = $1`, taskID).Scan(&gotSource); err != nil {
@@ -94,19 +112,21 @@ func TestInsertHumanTaskThenAttachRun(t *testing.T) {
 	a := requirePool(t)
 	ctx := context.Background()
 
-	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr-claude-only", "fix the thing")
+	wantSourceRef := SourceRef{Kind: "github_issue", Ref: "https://github.com/hhenrique/toy-repo/issues/3"}
+	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr-claude-only", "fix the thing", wantSourceRef)
 	if err != nil {
 		t.Fatalf("InsertHumanTask: %v", err)
 	}
 	if taskID == "" {
 		t.Fatalf("expected a non-empty task id")
 	}
+	cleanupTask(t, a.Pool, taskID)
 
 	var gotRunID *string
-	var gotRepo, gotWorkflow, gotSource, gotStatus string
+	var gotRepo, gotWorkflow, gotSource, gotStatus, gotSourceRefKind, gotSourceRefRef string
 	err = a.Pool.QueryRow(ctx,
-		`SELECT run_id, target_repo, workflow, source, status FROM backlog_tasks WHERE task_id = $1`, taskID,
-	).Scan(&gotRunID, &gotRepo, &gotWorkflow, &gotSource, &gotStatus)
+		`SELECT run_id, target_repo, workflow, source, status, source_ref_kind, source_ref_ref FROM backlog_tasks WHERE task_id = $1`, taskID,
+	).Scan(&gotRunID, &gotRepo, &gotWorkflow, &gotSource, &gotStatus, &gotSourceRefKind, &gotSourceRefRef)
 	if err != nil {
 		t.Fatalf("query back: %v", err)
 	}
@@ -124,6 +144,9 @@ func TestInsertHumanTaskThenAttachRun(t *testing.T) {
 	}
 	if gotStatus != "QUEUED" {
 		t.Errorf("status = %q, want QUEUED", gotStatus)
+	}
+	if gotSourceRefKind != wantSourceRef.Kind || gotSourceRefRef != wantSourceRef.Ref {
+		t.Errorf("source_ref = {%q, %q}, want %+v", gotSourceRefKind, gotSourceRefRef, wantSourceRef)
 	}
 
 	runID := "test-run-" + time.Now().Format(time.RFC3339Nano)
@@ -159,10 +182,12 @@ func TestListIncludesInsertedHumanTaskWithEmptyRunIDBeforeAttach(t *testing.T) {
 	a := requirePool(t)
 	ctx := context.Background()
 
-	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr-claude-only", "list test "+time.Now().Format(time.RFC3339Nano))
+	wantSourceRef := SourceRef{Kind: "github_issue", Ref: "https://github.com/hhenrique/toy-repo/issues/7"}
+	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr-claude-only", "list test "+time.Now().Format(time.RFC3339Nano), wantSourceRef)
 	if err != nil {
 		t.Fatalf("InsertHumanTask: %v", err)
 	}
+	cleanupTask(t, a.Pool, taskID)
 
 	tasks, err := List(ctx, a.Pool)
 	if err != nil {
@@ -186,6 +211,41 @@ func TestListIncludesInsertedHumanTaskWithEmptyRunIDBeforeAttach(t *testing.T) {
 	if found.Status != "QUEUED" {
 		t.Errorf("Status = %q, want QUEUED", found.Status)
 	}
+	if found.SourceRef != wantSourceRef {
+		t.Errorf("SourceRef = %+v, want %+v", found.SourceRef, wantSourceRef)
+	}
+}
+
+// TestListSurfacesZeroValueSourceRefForFreeTextTask is a regression guard
+// for the "no known source" case (doc 08: Kind "" means a free-text
+// Task) — List must report the zero value, not e.g. a NULL-scan error,
+// when InsertHumanTask was called with an empty SourceRef.
+func TestListSurfacesZeroValueSourceRefForFreeTextTask(t *testing.T) {
+	a := requirePool(t)
+	ctx := context.Background()
+
+	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr-claude-only", "free text task "+time.Now().Format(time.RFC3339Nano), SourceRef{})
+	if err != nil {
+		t.Fatalf("InsertHumanTask: %v", err)
+	}
+	cleanupTask(t, a.Pool, taskID)
+
+	tasks, err := List(ctx, a.Pool)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var found *Task
+	for i := range tasks {
+		if tasks[i].TaskID == taskID {
+			found = &tasks[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("List did not include inserted task %q", taskID)
+	}
+	if found.SourceRef != (SourceRef{}) {
+		t.Errorf("SourceRef = %+v, want zero value", found.SourceRef)
+	}
 }
 
 // TestListDerivesStatusFromRunEventsNotStaleColumn is a regression test:
@@ -197,11 +257,15 @@ func TestListDerivesStatusFromRunEventsNotStaleColumn(t *testing.T) {
 	a := requirePool(t)
 	ctx := context.Background()
 
-	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr-claude-only", "derive status test "+time.Now().Format(time.RFC3339Nano))
+	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr-claude-only", "derive status test "+time.Now().Format(time.RFC3339Nano), SourceRef{})
 	if err != nil {
 		t.Fatalf("InsertHumanTask: %v", err)
 	}
+	cleanupTask(t, a.Pool, taskID)
 	runID := "test-run-derive-status-" + time.Now().Format(time.RFC3339Nano)
+	t.Cleanup(func() {
+		a.Pool.Exec(context.Background(), `DELETE FROM run_events WHERE run_id = $1`, runID)
+	})
 	if err := AttachRun(ctx, a.Pool, taskID, runID); err != nil {
 		t.Fatalf("AttachRun: %v", err)
 	}
@@ -273,5 +337,61 @@ func TestListDerivesStatusFromRunEventsNotStaleColumn(t *testing.T) {
 	}
 	if stillStoredAsRunning != "RUNNING" {
 		t.Errorf("backlog_tasks.status = %q, want it to still literally say RUNNING (proving List derives, doesn't rely on this column being updated)", stillStoredAsRunning)
+	}
+}
+
+// TestListSurfacesOutcomeAndSummaryFromLatestEvent is a regression guard
+// for the Work view's own version of the same gap internal/inbox closes:
+// a human looking at a stuck Task used to see only its status, nothing
+// about what the last step actually produced. List must now surface it.
+func TestListSurfacesOutcomeAndSummaryFromLatestEvent(t *testing.T) {
+	a := requirePool(t)
+	ctx := context.Background()
+
+	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr-claude-only", "summary test "+time.Now().Format(time.RFC3339Nano), SourceRef{})
+	if err != nil {
+		t.Fatalf("InsertHumanTask: %v", err)
+	}
+	cleanupTask(t, a.Pool, taskID)
+	runID := "test-run-summary-" + time.Now().Format(time.RFC3339Nano)
+	t.Cleanup(func() {
+		a.Pool.Exec(context.Background(), `DELETE FROM run_events WHERE run_id = $1`, runID)
+	})
+	if err := AttachRun(ctx, a.Pool, taskID, runID); err != nil {
+		t.Fatalf("AttachRun: %v", err)
+	}
+
+	produced := map[string]any{"verdict": "changes_required", "findings": []any{
+		map[string]any{"severity": "advisory", "scope_classification": "in_scope", "description": "missing test", "location": "foo.go:1"},
+	}}
+	producedJSON, err := json.Marshal(produced)
+	if err != nil {
+		t.Fatalf("marshal produced: %v", err)
+	}
+	if _, err := a.Pool.Exec(ctx, `
+		INSERT INTO run_events (run_id, workflow, from_step, to_step, occurred_at, outcome, produced)
+		VALUES ($1, 'issue-to-pr-claude-only', 'review', 'coder_response', now(), 'changes_required', $2)
+	`, runID, producedJSON); err != nil {
+		t.Fatalf("insert run_events: %v", err)
+	}
+
+	tasks, err := List(ctx, a.Pool)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var found *Task
+	for i := range tasks {
+		if tasks[i].TaskID == taskID {
+			found = &tasks[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("List did not include task %q", taskID)
+	}
+	if found.Outcome != "changes_required" {
+		t.Errorf("Outcome = %q, want changes_required", found.Outcome)
+	}
+	if !strings.Contains(found.Summary, "Findings (1):") {
+		t.Errorf("Summary = %q, want it to contain the finding", found.Summary)
 	}
 }

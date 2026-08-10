@@ -14,6 +14,7 @@ package inbox
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -24,8 +25,9 @@ import (
 )
 
 // PendingRun is one Run currently parked at REVIEW_PENDING, with just
-// enough context (which step escalated, on what attempt, how long ago)
-// for a human to decide what to do without leaving this view.
+// enough context (which step escalated, on what attempt, how long ago,
+// and — see Outcome/Summary — why) for a human to decide what to do
+// without leaving this view.
 type PendingRun struct {
 	RunID         string    `json:"run_id"`
 	Workflow      string    `json:"workflow"`
@@ -33,6 +35,22 @@ type PendingRun struct {
 	StepID        string    `json:"step_id,omitempty"`
 	AttemptNumber int       `json:"attempt_number,omitempty"`
 	OccurredAt    time.Time `json:"occurred_at"`
+
+	// Outcome is the routing signal that landed this Run here — an
+	// agent's verdict ("escalate", "changes_required"), or a synthetic
+	// label ("malformed_output", "budget_exhausted",
+	// "harness_limit_exceeded") for the escalation kinds that aren't a
+	// verdict at all. "" for the rare case a resume immediately
+	// re-escalated with no Activity call in between.
+	Outcome string `json:"outcome,omitempty"`
+
+	// Summary renders the escalating transition's Produced content
+	// (verdict, scope_contract, findings, a diff summary) into a compact
+	// human-readable block — the same v1 content doc08's tracker mirror
+	// already posts externally (conductor.FormatEventContent), now
+	// visible here too instead of requiring a read of Temporal's raw
+	// history to find out why a Run escalated.
+	Summary string `json:"summary,omitempty"`
 }
 
 // List returns every Run whose most recent transition landed on
@@ -45,10 +63,11 @@ type PendingRun struct {
 // field to keep in sync.
 func List(ctx context.Context, pool *pgxpool.Pool) ([]PendingRun, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT run_id, workflow, from_step, coalesce(step_id, ''), coalesce(attempt_number, 0), occurred_at
+		SELECT run_id, workflow, from_step, coalesce(step_id, ''), coalesce(attempt_number, 0), occurred_at,
+		       coalesce(outcome, ''), produced
 		FROM (
 			SELECT DISTINCT ON (run_id)
-				run_id, workflow, from_step, to_step, step_id, attempt_number, occurred_at
+				run_id, workflow, from_step, to_step, step_id, attempt_number, occurred_at, outcome, produced
 			FROM run_events
 			ORDER BY run_id, occurred_at DESC, id DESC
 		) latest
@@ -63,8 +82,17 @@ func List(ctx context.Context, pool *pgxpool.Pool) ([]PendingRun, error) {
 	var out []PendingRun
 	for rows.Next() {
 		var p PendingRun
-		if err := rows.Scan(&p.RunID, &p.Workflow, &p.FromStep, &p.StepID, &p.AttemptNumber, &p.OccurredAt); err != nil {
+		var producedJSON []byte
+		if err := rows.Scan(&p.RunID, &p.Workflow, &p.FromStep, &p.StepID, &p.AttemptNumber, &p.OccurredAt,
+			&p.Outcome, &producedJSON); err != nil {
 			return nil, fmt.Errorf("inbox: list: scan: %w", err)
+		}
+		if len(producedJSON) > 0 {
+			var produced map[string]any
+			if err := json.Unmarshal(producedJSON, &produced); err != nil {
+				return nil, fmt.Errorf("inbox: list: unmarshal produced for run %q: %w", p.RunID, err)
+			}
+			p.Summary = conductor.FormatEventContent(produced)
 		}
 		out = append(out, p)
 	}

@@ -48,6 +48,14 @@ func TestGenerateRunIDWithoutIssueNumber(t *testing.T) {
 	}
 }
 
+func TestFormatIssueDescriptionIncludesSourceURL(t *testing.T) {
+	got := formatIssueDescription(githubIssue{Title: "Widgets are broken", Body: "steps to repro", URL: "https://github.com/hhenrique/toy-repo/issues/3"})
+	want := "Widgets are broken\n\nsteps to repro\n\nSource: https://github.com/hhenrique/toy-repo/issues/3"
+	if got != want {
+		t.Errorf("formatIssueDescription = %q, want %q", got, want)
+	}
+}
+
 func TestSubmitRequiresExactlyOneOfDescriptionOrGitHubIssue(t *testing.T) {
 	repo := conductor.Repo{Name: "x", CloneURL: "https://github.com/a/b.git", TestCommand: "true"}
 

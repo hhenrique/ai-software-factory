@@ -85,18 +85,30 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 	harnessTokensSpent := make(map[string]int)
 	var stepsVisited []string
 
-	recordTransition(eventActx, TransitionEvent{RunID: runID, Workflow: def.Workflow, FromStep: "", ToStep: startID})
+	// recordT/recordF close over runID/def.Workflow/in.SourceRef/runContext
+	// so every call site below stays terse. ev.Outcome/ev.Produced (set by
+	// the caller where meaningful) are what both the projection store
+	// (internal/eventlog) and doc08's best-effort tracker mirror read —
+	// see recordTransition.
+	recordT := func(ev TransitionEvent) {
+		recordTransition(eventActx, ev, in.SourceRef, runContext)
+	}
+	recordF := func(fromStep string, err error) (RunResult, error) {
+		return recordFailure(eventActx, runID, def.Workflow, fromStep, err, in.SourceRef, runContext)
+	}
+
+	recordT(TransitionEvent{RunID: runID, Workflow: def.Workflow, FromStep: "", ToStep: startID})
 
 	currentID := startID
 	for {
 		if currentID == "REVIEW_PENDING" {
 			decision, err := waitForHumanDecision(ctx)
 			if err != nil {
-				return recordFailure(eventActx, runID, def.Workflow, currentID, err)
+				return recordF(currentID, err)
 			}
 
 			if decision.Action == "cancel" {
-				recordTransition(eventActx, TransitionEvent{
+				recordT(TransitionEvent{
 					RunID: runID, Workflow: def.Workflow, FromStep: "REVIEW_PENDING", ToStep: "CANCELLED",
 				})
 				return RunResult{
@@ -118,7 +130,7 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 			if decision.Hint != "" {
 				runContext["human_hint"] = decision.Hint
 			}
-			recordTransition(eventActx, TransitionEvent{
+			recordT(TransitionEvent{
 				RunID: runID, Workflow: def.Workflow, FromStep: "REVIEW_PENDING", ToStep: decision.ResumeStepID,
 			})
 			currentID = decision.ResumeStepID
@@ -136,7 +148,7 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 
 		step, ok := index[currentID]
 		if !ok {
-			return recordFailure(eventActx, runID, def.Workflow, currentID,
+			return recordF(currentID,
 				fmt.Errorf("conductor: step %q not found in definition %q", currentID, def.Workflow))
 		}
 
@@ -156,12 +168,12 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 			if exhausted {
 				dest, err := route(actx, runID, step, "budget_exhausted", runContext)
 				if err != nil {
-					return recordFailure(eventActx, runID, def.Workflow, step.ID,
+					return recordF(step.ID,
 						fmt.Errorf("conductor: step %q: budget %q exhausted but %w", step.ID, step.Budget, err))
 				}
-				recordTransition(eventActx, TransitionEvent{
+				recordT(TransitionEvent{
 					RunID: runID, Workflow: def.Workflow, FromStep: step.ID, ToStep: dest,
-					StepID: step.ID, AttemptNumber: attemptNumber,
+					StepID: step.ID, AttemptNumber: attemptNumber, Outcome: "budget_exhausted",
 				})
 				currentID = dest
 				continue
@@ -177,9 +189,9 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 		if step.Type == workflowdef.StepTypeAgent {
 			limitKey := harnesslimits.Key(harness, model, params["effort"])
 			if limit, ok := in.HarnessLimits[limitKey]; ok && harnessTokensSpent[limitKey] > limit {
-				recordTransition(eventActx, TransitionEvent{
+				recordT(TransitionEvent{
 					RunID: runID, Workflow: def.Workflow, FromStep: step.ID, ToStep: "REVIEW_PENDING",
-					StepID: step.ID, AttemptNumber: attemptNumber,
+					StepID: step.ID, AttemptNumber: attemptNumber, Outcome: "harness_limit_exceeded",
 				})
 				currentID = "REVIEW_PENDING"
 				continue
@@ -208,7 +220,7 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 		var out ActivityOutput
 		activityName := activityNameFor(*step)
 		if err := workflow.ExecuteActivity(actx, activityName, activityIn).Get(actx, &out); err != nil {
-			return recordFailure(eventActx, runID, def.Workflow, step.ID,
+			return recordF(step.ID,
 				fmt.Errorf("conductor: activity %q for step %q: %w", activityName, step.ID, err))
 		}
 
@@ -226,12 +238,13 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 
 		if out.Malformed {
 			if step.OnMalformedOutput == "" {
-				return recordFailure(eventActx, runID, def.Workflow, step.ID,
+				return recordF(step.ID,
 					fmt.Errorf("conductor: step %q produced malformed output with no on_malformed_output handler", step.ID))
 			}
-			recordTransition(eventActx, TransitionEvent{
+			recordT(TransitionEvent{
 				RunID: runID, Workflow: def.Workflow, FromStep: step.ID, ToStep: step.OnMalformedOutput,
 				StepID: step.ID, AttemptNumber: attemptNumber, TokenDelta: out.TokensUsed, ActivityCalls: 1,
+				Outcome: "malformed_output", Produced: out.Produced,
 			})
 			currentID = step.OnMalformedOutput
 			continue
@@ -239,26 +252,33 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 
 		dest, err := route(actx, runID, step, out.Outcome, runContext)
 		if err != nil {
-			return recordFailure(eventActx, runID, def.Workflow, step.ID, err)
+			return recordF(step.ID, err)
 		}
-		recordTransition(eventActx, TransitionEvent{
+		recordT(TransitionEvent{
 			RunID: runID, Workflow: def.Workflow, FromStep: step.ID, ToStep: dest,
 			StepID: step.ID, AttemptNumber: attemptNumber, TokenDelta: out.TokensUsed, ActivityCalls: 1,
+			Outcome: out.Outcome, Produced: out.Produced,
 		})
 		currentID = dest
 	}
 }
 
 // recordTransition emits one structured event (docs/01) via
-// RecordEventActivityName. Best-effort: a projection-store hiccup
-// recording telemetry must not fail the Run itself, so an error here is
-// logged, not propagated — unlike every step Activity's own errors, which
-// do fail the Run.
-func recordTransition(ctx workflow.Context, ev TransitionEvent) {
+// RecordEventActivityName — including ev.Outcome/ev.Produced, so the
+// projection store carries the same verdict/scope_contract/findings/diff
+// content a control-plane surface (internal/inbox, internal/backlog) can
+// later render without needing Temporal's raw history — then best-effort
+// mirrors it onto whatever external tracker(s) are resolved for this Run
+// (docs/08 — see postTrackerComments). Both are best-effort: a
+// projection-store hiccup or a comment-post failure must not fail the Run
+// itself, so an error from either is logged, not propagated — unlike
+// every step Activity's own errors, which do fail the Run.
+func recordTransition(ctx workflow.Context, ev TransitionEvent, sourceRef SourceRef, runContext map[string]any) {
 	if err := workflow.ExecuteActivity(ctx, RecordEventActivityName, ev).Get(ctx, nil); err != nil {
 		workflow.GetLogger(ctx).Warn("conductor: failed to record transition event",
 			"error", err, "run_id", ev.RunID, "from_step", ev.FromStep, "to_step", ev.ToStep)
 	}
+	postTrackerComments(ctx, sourceRef, runContext, ev)
 }
 
 // recordFailure records a FAILED transition event before returning err as
@@ -270,11 +290,11 @@ func recordTransition(ctx workflow.Context, ev TransitionEvent) {
 // no handler — leaves the same structured trace in run_events a normal
 // terminal state would, instead of silently ending with only Temporal's
 // own workflow history to explain what happened.
-func recordFailure(ctx workflow.Context, runID, workflowName, fromStep string, err error) (RunResult, error) {
+func recordFailure(ctx workflow.Context, runID, workflowName, fromStep string, err error, sourceRef SourceRef, runContext map[string]any) (RunResult, error) {
 	recordTransition(ctx, TransitionEvent{
 		RunID: runID, Workflow: workflowName, FromStep: fromStep, ToStep: "FAILED",
 		FailureReason: err.Error(),
-	})
+	}, sourceRef, runContext)
 	return RunResult{}, err
 }
 

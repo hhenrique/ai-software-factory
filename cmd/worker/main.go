@@ -6,7 +6,11 @@
 // the control plane's projection store (docs/01, docs/04's "Smoke-test
 // strategy"/"Worktree storage" sections) — the foundation any future
 // Overview read surface projects from, not something a Workflow
-// Definition step declares.
+// Definition step declares. tracker.post_comment (internal/activities/tracker)
+// is the same shape: RunWorkflow's recordTransition calls it directly,
+// best-effort, to mirror the same transition onto the Run's PR and/or the
+// Task's source (docs/08) — real gh CLI calls against whatever real PR/
+// issue a Run's SourceRef/pr_url name, including during `make smoketest`.
 //
 // Activity registration is stub.Registrations (every Activity) with the
 // real implementations layered on top — worktree.create
@@ -36,6 +40,7 @@ import (
 	"factory/internal/activities/harness"
 	"factory/internal/activities/pr"
 	"factory/internal/activities/stub"
+	"factory/internal/activities/tracker"
 	"factory/internal/activities/verify"
 	"factory/internal/backlog"
 	"factory/internal/conductor"
@@ -74,6 +79,7 @@ func main() {
 	defer eventPool.Close()
 	eventActivities := &eventlog.Activities{Pool: eventPool}
 	backlogActivities := &backlog.Activities{Pool: eventPool} // same projection-store instance
+	trackerActivities := &tracker.Activities{Pool: eventPool} // same projection-store instance
 
 	w := worker.New(c, taskQueue, worker.Options{})
 	w.RegisterWorkflow(conductor.RunWorkflow)
@@ -93,6 +99,7 @@ func main() {
 		prActivities.Registrations(),
 		eventActivities.Registrations(),
 		backlogActivities.Registrations(),
+		trackerActivities.Registrations(),
 	}
 	if os.Getenv("FACTORY_STUB_HARNESS_INVOKE") == "" {
 		real = append(real, harnessActivities.Registrations())

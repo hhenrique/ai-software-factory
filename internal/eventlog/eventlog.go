@@ -9,6 +9,7 @@ package eventlog
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -36,13 +37,28 @@ func (a *Activities) Registrations() map[string]any {
 // nothing to reconcile if a retry double-records (an extra row with
 // identical from_step/to_step doesn't change what "most recent" resolves
 // to for a caller reading run_events, since it's still ordered last).
+//
+// ev.Produced is marshaled to JSON before insert — pgx sends a []byte
+// value for a jsonb column as-is, no separate pgtype wrapper needed. nil
+// (an empty/absent map) stays NULL rather than the literal "null" or "{}",
+// consistent with outcome/failure_reason's NULLIF-on-empty-string
+// convention for "nothing to show" below.
 func (a *Activities) RecordEvent(ctx context.Context, ev conductor.TransitionEvent) error {
+	var producedJSON []byte
+	if len(ev.Produced) > 0 {
+		b, err := json.Marshal(ev.Produced)
+		if err != nil {
+			return fmt.Errorf("eventlog: record event: marshal produced: %w", err)
+		}
+		producedJSON = b
+	}
+
 	_, err := a.Pool.Exec(ctx, `
 		INSERT INTO run_events
-			(run_id, workflow, from_step, to_step, step_id, attempt_number, token_delta, activity_calls, failure_reason)
+			(run_id, workflow, from_step, to_step, step_id, attempt_number, token_delta, activity_calls, failure_reason, outcome, produced)
 		VALUES
-			($1, $2, $3, $4, NULLIF($5, ''), $6, $7, $8, NULLIF($9, ''))
-	`, ev.RunID, ev.Workflow, ev.FromStep, ev.ToStep, ev.StepID, ev.AttemptNumber, ev.TokenDelta, ev.ActivityCalls, ev.FailureReason)
+			($1, $2, $3, $4, NULLIF($5, ''), $6, $7, $8, NULLIF($9, ''), NULLIF($10, ''), $11)
+	`, ev.RunID, ev.Workflow, ev.FromStep, ev.ToStep, ev.StepID, ev.AttemptNumber, ev.TokenDelta, ev.ActivityCalls, ev.FailureReason, ev.Outcome, producedJSON)
 	if err != nil {
 		return fmt.Errorf("eventlog: record event: %w", err)
 	}

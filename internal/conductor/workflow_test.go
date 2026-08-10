@@ -35,6 +35,16 @@ func placeholderRecordEvent(ctx context.Context, ev conductor.TransitionEvent) e
 	return nil
 }
 
+// placeholderTrackerPostComment stands in for TrackerPostCommentActivityName
+// (docs/08) — same reasoning as placeholderRecordEvent above:
+// postTrackerComments swallows a call to an unregistered/unmocked activity
+// as a logged warning rather than failing the Run, so registering this by
+// default means tests that do exercise the tracker mirror succeed because
+// the call actually resolved, not by accident of that error-swallowing.
+func placeholderTrackerPostComment(ctx context.Context, in conductor.TrackerCommentInput) error {
+	return nil
+}
+
 func newTestEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
 	t.Helper()
 	var suite testsuite.WorkflowTestSuite
@@ -53,6 +63,10 @@ func newTestEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
 	}
 	env.RegisterActivityWithOptions(placeholderRecordEvent, activity.RegisterOptions{
 		Name:                          conductor.RecordEventActivityName,
+		DisableAlreadyRegisteredCheck: true,
+	})
+	env.RegisterActivityWithOptions(placeholderTrackerPostComment, activity.RegisterOptions{
+		Name:                          conductor.TrackerPostCommentActivityName,
 		DisableAlreadyRegisteredCheck: true,
 	})
 	return env
@@ -800,4 +814,104 @@ func TestRunWorkflowStartsAtTerminalState(t *testing.T) {
 	require.NoError(t, env.GetWorkflowResult(&result))
 	require.Equal(t, "CANCELLED", result.FinalState)
 	require.Empty(t, result.StepsVisited)
+}
+
+// TestRunWorkflowPostsTrackerCommentOnceRunHasAPRURL is docs/08's PR-side
+// mirror: once pr.create_and_link produces pr_url, the transition that
+// merged it (create_pr -> COMPLETED) must post a github_pr tracker comment
+// carrying that same URL.
+func TestRunWorkflowPostsTrackerCommentOnceRunHasAPRURL(t *testing.T) {
+	env := newTestEnv(t)
+	def := mustParseDependencyBumpMinimal(t)
+
+	env.OnActivity("worktree.create", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{}, nil).Once()
+	env.OnActivity(conductor.HarnessInvokeActivityName, mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{}, nil).Once()
+	env.OnActivity("run.tests_lint_build", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Outcome: "pass"}, nil).Once()
+	env.OnActivity("pr.create_and_link", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Produced: map[string]any{"pr_url": "https://github.com/o/r/pull/7"}}, nil).Once()
+
+	var comments []conductor.TrackerCommentInput
+	env.OnActivity(conductor.TrackerPostCommentActivityName, mock.Anything, mock.Anything).
+		Return(func(ctx context.Context, in conductor.TrackerCommentInput) error {
+			comments = append(comments, in)
+			return nil
+		})
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{Definition: def})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	require.NotEmpty(t, comments, "expected at least one tracker comment once pr_url is known")
+	last := comments[len(comments)-1]
+	require.Equal(t, "github_pr", last.TargetKind)
+	require.Equal(t, "https://github.com/o/r/pull/7", last.TargetRef)
+	require.Contains(t, last.Body, "create_pr")
+}
+
+// TestRunWorkflowPostsTrackerCommentToSourceRefFromTheStart is docs/08's
+// source-side mirror: unlike pr_url (only known once create_pr runs),
+// SourceRef is resolved before the Run even starts (taskintake.Submit), so
+// the very first transition (start -> provision) already has somewhere to
+// post.
+func TestRunWorkflowPostsTrackerCommentToSourceRefFromTheStart(t *testing.T) {
+	env := newTestEnv(t)
+	def := mustParseDependencyBumpMinimal(t)
+
+	env.OnActivity("worktree.create", mock.Anything, mock.Anything).Return(conductor.ActivityOutput{}, nil).Once()
+	env.OnActivity(conductor.HarnessInvokeActivityName, mock.Anything, mock.Anything).Return(conductor.ActivityOutput{}, nil).Once()
+	env.OnActivity("run.tests_lint_build", mock.Anything, mock.Anything).Return(conductor.ActivityOutput{Outcome: "pass"}, nil).Once()
+	env.OnActivity("pr.create_and_link", mock.Anything, mock.Anything).Return(conductor.ActivityOutput{}, nil).Once()
+
+	var comments []conductor.TrackerCommentInput
+	env.OnActivity(conductor.TrackerPostCommentActivityName, mock.Anything, mock.Anything).
+		Return(func(ctx context.Context, in conductor.TrackerCommentInput) error {
+			comments = append(comments, in)
+			return nil
+		})
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{
+		Definition: def,
+		SourceRef:  conductor.SourceRef{Kind: "github_issue", Ref: "https://github.com/o/r/issues/3"},
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	require.NotEmpty(t, comments)
+	first := comments[0]
+	require.Equal(t, "github_issue", first.TargetKind)
+	require.Equal(t, "https://github.com/o/r/issues/3", first.TargetRef)
+	require.Contains(t, first.Body, "(start)")
+	// Every later transition keeps posting to the same source too, not
+	// just the first one.
+	require.Greater(t, len(comments), 1)
+}
+
+// TestRunWorkflowSurvivesTrackerPostCommentFailure is docs/08's "best-
+// effort, never blocks the Run": a comment-post failure (a GitHub API
+// hiccup, an expired token) must not fail the Run.
+func TestRunWorkflowSurvivesTrackerPostCommentFailure(t *testing.T) {
+	env := newTestEnv(t)
+	def := mustParseDependencyBumpMinimal(t)
+
+	env.OnActivity("worktree.create", mock.Anything, mock.Anything).Return(conductor.ActivityOutput{}, nil).Once()
+	env.OnActivity(conductor.HarnessInvokeActivityName, mock.Anything, mock.Anything).Return(conductor.ActivityOutput{}, nil).Once()
+	env.OnActivity("run.tests_lint_build", mock.Anything, mock.Anything).Return(conductor.ActivityOutput{Outcome: "pass"}, nil).Once()
+	env.OnActivity("pr.create_and_link", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Produced: map[string]any{"pr_url": "https://github.com/o/r/pull/7"}}, nil).Once()
+	env.OnActivity(conductor.TrackerPostCommentActivityName, mock.Anything, mock.Anything).
+		Return(errors.New("gh: authentication expired"))
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{Definition: def})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError(), "a tracker comment-post failure must not fail the Run")
+
+	var result conductor.RunResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+	require.Equal(t, "COMPLETED", result.FinalState)
 }

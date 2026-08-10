@@ -2,6 +2,8 @@ package inbox
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,6 +148,13 @@ func TestListFindsARunParkedAtReviewPending(t *testing.T) {
 	if found.FromStep != "verify" {
 		t.Errorf("FromStep = %q, want verify", found.FromStep)
 	}
+	// stub.RunTestsLintBuild reports Outcome: "fail" while
+	// AttemptNumber <= FailVerifyUntilAttempt — this is the routing
+	// signal that actually landed the Run here, now visible without
+	// reading Temporal's raw history to find it.
+	if found.Outcome != "fail" {
+		t.Errorf("Outcome = %q, want fail", found.Outcome)
+	}
 
 	// Cleanup: cancel and wait for it to actually take effect before the
 	// test worker stops polling — a fire-and-forget signal here can leave
@@ -159,6 +168,62 @@ func TestListFindsARunParkedAtReviewPending(t *testing.T) {
 	defer cancel()
 	if err := run.Get(ctx, &conductor.RunResult{}); err != nil {
 		t.Logf("cleanup: waiting for cancellation: %v", err)
+	}
+}
+
+// TestListSurfacesOutcomeAndSummaryFromLatestEvent is a hermetic
+// regression guard (a direct run_events insert, no real Temporal
+// execution needed) for the actual gap this closes: a human looking at
+// the Inbox used to see only "escalated from plan," nothing about *why*
+// — the Planner's verdict and scope_contract were only visible by reading
+// Temporal's raw Activity history by hand. List must now surface them.
+func TestListSurfacesOutcomeAndSummaryFromLatestEvent(t *testing.T) {
+	pool := requirePool(t)
+	ctx := context.Background()
+
+	runID := "inbox-summary-test-" + time.Now().Format(time.RFC3339Nano)
+	// This row lands in the real, live Inbox view the moment it's
+	// inserted (to_step = REVIEW_PENDING is exactly List's WHERE clause)
+	// — must be cleaned up like any other user-visible test row.
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM run_events WHERE run_id = $1`, runID)
+	})
+	produced := map[string]any{
+		"verdict":        "escalate",
+		"scope_contract": map[string]any{"acceptance_criteria": []any{"a", "b"}},
+	}
+	producedJSON, err := json.Marshal(produced)
+	if err != nil {
+		t.Fatalf("marshal produced: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO run_events (run_id, workflow, from_step, to_step, occurred_at, outcome, produced)
+		VALUES ($1, 'issue-to-pr-claude-only', 'plan', 'REVIEW_PENDING', now(), 'escalate', $2)
+	`, runID, producedJSON); err != nil {
+		t.Fatalf("insert run_events: %v", err)
+	}
+
+	pending, err := List(ctx, pool)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var found *PendingRun
+	for i := range pending {
+		if pending[i].RunID == runID {
+			found = &pending[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("List did not include %q", runID)
+	}
+	if found.Outcome != "escalate" {
+		t.Errorf("Outcome = %q, want escalate", found.Outcome)
+	}
+	if !strings.Contains(found.Summary, "Verdict: escalate") {
+		t.Errorf("Summary = %q, want it to contain the verdict", found.Summary)
+	}
+	if !strings.Contains(found.Summary, "acceptance_criteria: a; b") {
+		t.Errorf("Summary = %q, want it to contain the scope contract", found.Summary)
 	}
 }
 

@@ -20,6 +20,22 @@ const RecordEventActivityName = "conductor.record_event"
 // See HumanDecision.
 const HumanDecisionSignalName = "human_decision"
 
+// TrackerPostCommentActivityName is the Activity recordTransition/
+// recordFailure best-effort dispatch to (docs/08-tracking-integration.md)
+// after a transition lands in the projection store — mirrors read-only
+// progress commentary onto the Run's PR and/or the Task's source. Like
+// RecordEventActivityName, this isn't a Workflow Definition step;
+// RunWorkflow calls it directly, never via a step's `action:`.
+const TrackerPostCommentActivityName = "tracker.post_comment"
+
+// TrackerCommentInput is TrackerPostCommentActivityName's payload.
+type TrackerCommentInput struct {
+	RunID      string
+	TargetKind string // "github_pr" | "github_issue" | "aha_idea"
+	TargetRef  string
+	Body       string
+}
+
 // activityNameFor maps a step to the Temporal Activity name that executes
 // it: a tool step's own action identifier (e.g. "worktree.create"), or
 // HarnessInvokeActivityName for every agent step. Doc 05: "the conductor

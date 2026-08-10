@@ -1,11 +1,17 @@
 # Tracking Integration
 
-Status: decided (design), not yet built
+Status: decided; v1 built (sequencing steps 1-3 below) — step 4 (Aha!
+adapter) and step 5 (richer narrative content) still deferred
 Depends on: 01-run-state-machine.md (the transitions being mirrored),
 03-roles-and-harness-contract.md (the structured role output being
 mirrored)
-Consumed by: none yet — a future doc04 update (a config surface for
-tracker credentials) once this is built
+Consumed by: internal/inbox and internal/backlog — the control plane's
+Inbox/Work views render the same per-transition `outcome`/`produced`
+content this doc's mirror formats (see `conductor.FormatEventContent`),
+now also persisted on `run_events` and surfaced internally, not just
+mirrored externally. A future doc04 update (a config surface for tracker
+credentials) is still needed once a non-ambient-auth backend (Aha!) is
+added.
 
 ## Problem
 
@@ -157,13 +163,29 @@ control plane exists.
 
 ## Sequencing
 
-1. Add `Task.SourceRef` (schema + `taskintake.Submit` population) —
-   small, mechanical, no adapter needed yet.
-2. `Tracker` interface + GitHub adapter only (`gh pr comment` /
+1. **Done.** Add `Task.SourceRef` (schema + `taskintake.Submit`
+   population) — small, mechanical, no adapter needed yet.
+2. **Done.** `Tracker` interface + GitHub adapter only (`gh pr comment` /
    `gh issue comment`) — reuses `gh`'s ambient auth, same as
-   `internal/activities/pr`.
-3. Hook into `recordTransition` / `recordFailure`, best-effort, using
-   today's existing structured role output as content.
+   `internal/activities/pr`. Lives in `internal/activities/tracker`.
+3. **Done.** Hook into `recordTransition` / `recordFailure`, best-effort,
+   using today's existing structured role output as content. A
+   comment-post failure is recorded into its own `tracker_comment_failures`
+   table (deliberately not `run_events` — a synthetic row there would
+   corrupt `internal/backlog.List`'s "latest transition" status
+   derivation), satisfying "best-effort must not mean silent" above.
+
+   Built alongside this step, one layer down: `run_events` itself gained
+   `outcome`/`produced` columns carrying the same content the tracker
+   comment formats (previously this only existed transiently inside the
+   Temporal workflow, visible to a human only by reading Temporal's raw
+   Activity history by hand). `internal/inbox` and `internal/backlog` now
+   render it directly — see "Consumed by" above. Not something this doc
+   originally scoped, but the natural consequence of making the content
+   queryable: once it's a column, nothing stops the control plane's own
+   views from reading it too, and doc04's Inbox/Work sections needed
+   exactly this ("why is this Run stuck") independently of whether an
+   external tracker is even configured for that Task.
 4. Aha! adapter — deferred until there's an actual Aha!-sourced Task
    intake path; see "Aha!" above for why building it earlier has no real
    caller.

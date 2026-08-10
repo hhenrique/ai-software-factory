@@ -57,6 +57,23 @@ type RunInput struct {
 	// this is the only source roleConfig has for that data inside
 	// RunWorkflow.
 	RoleAssignments map[string]workflowdef.Role
+
+	// SourceRef identifies the Task's source (docs/08's source-side
+	// Tracker target) — Kind "" means no known source, so recordTransition
+	// posts no source-side comment. Resolved once by whatever starts the
+	// Run (internal/taskintake.Submit), same determinism reason as Repo/
+	// HarnessLimits/RoleAssignments above.
+	SourceRef SourceRef
+}
+
+// SourceRef mirrors internal/backlog.SourceRef's shape without importing
+// that package — internal/backlog already imports conductor (for
+// ActivityInput/ActivityOutput), so the dependency can only run one way,
+// same reason RunInput.Repo is its own conductor.Repo rather than
+// internal/repositories.Repository.
+type SourceRef struct {
+	Kind string // "github_issue" | "aha_idea" | ""
+	Ref  string
 }
 
 // Repo is a slice of doc 04's Repository entity: just enough to clone and
@@ -199,6 +216,24 @@ type TransitionEvent struct {
 	// error text, so a control-plane surface (docs/04's Work section) can
 	// show *why* a Run failed, not just that it did.
 	FailureReason string
+
+	// Outcome is the routing signal that produced this transition — an
+	// agent step's verdict (e.g. "escalate", "changes_required"), a tool
+	// step's result (e.g. "pass", "fail"), or a synthetic label for a
+	// transition with no Activity call of its own ("budget_exhausted",
+	// "malformed_output"). "" where no single outcome applies (Run start,
+	// resume, cancel).
+	Outcome string
+
+	// Produced is the triggering Activity call's Produced fields — nil
+	// for transitions with no Activity call of their own. Persisted
+	// verbatim (see internal/eventlog) so a control-plane surface
+	// (internal/inbox, internal/backlog) can render the same
+	// verdict/scope_contract/findings/diff content doc08's tracker mirror
+	// already formats for external posting (see FormatEventContent),
+	// without needing Temporal's raw history to find it — doc04's "full
+	// trace/replay per Run" is non-negotiable even for a minimal build.
+	Produced map[string]any
 }
 
 // ActivityOutput is the normalized output every Activity this package
