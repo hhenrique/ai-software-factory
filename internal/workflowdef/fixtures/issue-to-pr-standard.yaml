@@ -50,7 +50,11 @@ steps:
     role: reviewer
     context: [scope_contract, diff]
     budget: review_rounds
-    output_schema: { findings: array, verdict: [approved, changes_required], assessment: string }
+    output_schema: {
+      findings: [{ description: string, location: string, scope_classification: [in_scope, out_of_scope], severity: [blocking, advisory] }],
+      verdict: [approved, changes_required],
+      assessment: string,
+    }
     on:
       approved:         create_pr
       changes_required: coder_response

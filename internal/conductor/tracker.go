@@ -146,6 +146,15 @@ func formatScopeContract(sc map[string]any) string {
 
 // formatFindings summarizes a Reviewer's findings (doc03:
 // description/location/scope_classification/severity per finding).
+// Tolerant of a harness that doesn't follow that shape exactly — found
+// live: a real Reviewer call returned {message, severity} instead of
+// {description, location, scope_classification, severity} (the review
+// step's output_schema declared findings as a bare "array" with no
+// example item shape to follow — since fixed in the workflow YAML, but
+// this still degrades gracefully rather than rendering an empty
+// "[medium/]  ()" line if a harness ever deviates again). A finding with
+// no usable text at all (neither field present) is dropped rather than
+// rendered as a blank line.
 func formatFindings(findings []any) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Findings (%d):", len(findings))
@@ -154,11 +163,29 @@ func formatFindings(findings []any) string {
 		if !ok {
 			continue
 		}
-		severity, _ := fm["severity"].(string)
-		scope, _ := fm["scope_classification"].(string)
-		description, _ := fm["description"].(string)
-		location, _ := fm["location"].(string)
-		fmt.Fprintf(&b, "\n- [%s/%s] %s (%s)", severity, scope, description, location)
+		text, _ := fm["description"].(string)
+		if text == "" {
+			text, _ = fm["message"].(string)
+		}
+		if text == "" {
+			continue
+		}
+
+		var tags []string
+		if severity, _ := fm["severity"].(string); severity != "" {
+			tags = append(tags, severity)
+		}
+		if scope, _ := fm["scope_classification"].(string); scope != "" {
+			tags = append(tags, scope)
+		}
+		line := text
+		if len(tags) > 0 {
+			line = "[" + strings.Join(tags, "/") + "] " + line
+		}
+		if location, _ := fm["location"].(string); location != "" {
+			line += " (" + location + ")"
+		}
+		fmt.Fprintf(&b, "\n- %s", line)
 	}
 	return b.String()
 }

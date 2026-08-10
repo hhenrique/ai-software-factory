@@ -77,6 +77,44 @@ func TestFormatEventContentOmitsAssessmentAndRationaleWhenAbsent(t *testing.T) {
 	}
 }
 
+// TestFormatFindingsFallsBackToMessageFieldWhenDescriptionAbsent is a
+// regression test for a real bug: the review step's output_schema used
+// to declare findings as a bare "array" with no example item shape, so a
+// real Reviewer call returned {message, severity} instead of doc03's
+// {description, location, scope_classification, severity} — rendering as
+// a content-free "[medium/]  ()" line. The schema now shows an example
+// item (see workflows/issue-to-pr-claude-only.yaml), but this renderer
+// must keep degrading gracefully regardless — a harness's own field
+// naming isn't something this package can fully control.
+func TestFormatFindingsFallsBackToMessageFieldWhenDescriptionAbsent(t *testing.T) {
+	produced := map[string]any{
+		"findings": []any{
+			map[string]any{
+				"message":  "stepAnimation only reflects once per axis.",
+				"severity": "medium",
+			},
+		},
+	}
+	got := FormatEventContent(produced)
+	if !strings.Contains(got, "[medium] stepAnimation only reflects once per axis.") {
+		t.Errorf("FormatEventContent = %q, want the message field used when description is absent", got)
+	}
+}
+
+// TestFormatFindingsDropsFindingWithNoUsableText guards against
+// rendering an empty "- " line for a finding that has neither field.
+func TestFormatFindingsDropsFindingWithNoUsableText(t *testing.T) {
+	produced := map[string]any{
+		"findings": []any{
+			map[string]any{"severity": "medium"},
+		},
+	}
+	got := FormatEventContent(produced)
+	if strings.Contains(got, "\n- ") {
+		t.Errorf("FormatEventContent = %q, want the textless finding dropped, not rendered blank", got)
+	}
+}
+
 func TestFormatTransitionCommentIncludesScopeContract(t *testing.T) {
 	produced := map[string]any{
 		"scope_contract": map[string]any{

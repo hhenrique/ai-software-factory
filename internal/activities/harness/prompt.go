@@ -51,10 +51,13 @@ func buildPrompt(in conductor.ActivityInput) string {
 		schemaJSON, _ := json.MarshalIndent(in.OutputSchema, "", "  ")
 		b.WriteString("Respond with a fenced ```json code block (and nothing else after it) " +
 			"containing an object matching this shape. Each key's value below is either an " +
-			"array of allowed literal strings to choose one from, or a TYPE PLACEHOLDER " +
+			"array of allowed literal strings to choose one from, a TYPE PLACEHOLDER " +
 			"naming what kind of value to put there (e.g. \"object\" means put an actual " +
 			"JSON object there, not the literal string \"object\"; \"array\" means put an " +
-			"actual JSON array there):\n")
+			"actual JSON array there), or an array containing exactly one example object: " +
+			"produce an array of zero or more objects shaped like that example (same field " +
+			"names — do not invent your own), each field value itself following these same " +
+			"placeholder/enum rules:\n")
 		b.Write(schemaJSON)
 		b.WriteString("\n")
 	}
