@@ -118,6 +118,8 @@ func main() {
 	mux.HandleFunc("POST /api/settings", setSettingHandler(pool))
 	mux.HandleFunc("GET /api/tasks", listTasksHandler(d))
 	mux.HandleFunc("POST /api/tasks", createTaskHandler(d))
+	mux.HandleFunc("POST /api/tasks/retry", retryTaskHandler(d))
+	mux.HandleFunc("GET /api/runs/{run_id}", runDetailHandler(pool))
 	mux.HandleFunc("GET /api/inbox", listInboxHandler(d))
 	mux.HandleFunc("POST /api/inbox/resume", resumeInboxHandler(d))
 	mux.HandleFunc("POST /api/inbox/cancel", cancelInboxHandler(d))
@@ -687,6 +689,101 @@ func createTaskHandler(d *deps) http.HandlerFunc {
 			resp.AttachRunWarning = result.AttachRunWarning.Error()
 		}
 		writeJSON(w, http.StatusCreated, resp)
+	}
+}
+
+type retryTaskRequest struct {
+	TaskID string `json:"task_id"`
+}
+
+// retryTaskHandler starts a fresh Run for a failed human-submitted Task.
+// It intentionally retries from the normal workflow entry point: resuming
+// an arbitrary failed step would require reconstructing the old Run's
+// context and worktree, which is not yet a safe public contract.
+func retryTaskHandler(d *deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req retryTaskRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "malformed JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.TaskID == "" {
+			http.Error(w, "task_id is required", http.StatusBadRequest)
+			return
+		}
+
+		tasks, err := backlog.List(r.Context(), d.pool)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		var task *backlog.Task
+		for i := range tasks {
+			if tasks[i].TaskID == req.TaskID {
+				task = &tasks[i]
+				break
+			}
+		}
+		if task == nil {
+			http.Error(w, "task not found", http.StatusNotFound)
+			return
+		}
+		if task.Status != "FAILED" {
+			http.Error(w, fmt.Sprintf("task %q is %s, only FAILED tasks can be retried", task.TaskID, task.Status), http.StatusConflict)
+			return
+		}
+		if task.Source != "human" || task.TargetRepo == "" || task.Description == "" {
+			http.Error(w, "only failed human-submitted tasks with a repository and description can be retried", http.StatusBadRequest)
+			return
+		}
+
+		repo, err := repositories.Get(r.Context(), d.pool, task.TargetRepo)
+		if errors.Is(err, repositories.ErrNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !repo.Enabled {
+			http.Error(w, fmt.Sprintf("repository %q is disabled", task.TargetRepo), http.StatusConflict)
+			return
+		}
+
+		result, err := taskintake.Submit(r.Context(), taskintake.Deps{
+			Pool: d.pool, TemporalClient: d.temporal, TaskQueue: d.taskQueue, HarnessLimits: d.harnessLimits,
+		}, taskintake.Params{
+			Repo:         conductor.Repo{Name: task.TargetRepo, CloneURL: repo.CloneURL, TestCommand: repo.TestCommand},
+			WorkflowFile: task.Workflow,
+			Description:  task.Description,
+			SourceRef:    task.SourceRef,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusCreated, createTaskResponse{TaskID: result.TaskID, RunID: result.RunID, Workflow: result.Workflow})
+	}
+}
+
+func runDetailHandler(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		runID := r.PathValue("run_id")
+		if runID == "" {
+			http.Error(w, "run_id is required", http.StatusBadRequest)
+			return
+		}
+		events, err := eventlog.ListRunEvents(r.Context(), pool, runID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if len(events) == 0 {
+			http.Error(w, "run not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"run_id": runID, "events": events})
 	}
 }
 

@@ -136,6 +136,38 @@ func TestRecordEventPersistsOutcomeAndProduced(t *testing.T) {
 	}
 }
 
+func TestListRunEventsReturnsTimelineAndRenderedSummary(t *testing.T) {
+	a := requirePool(t)
+	ctx := context.Background()
+	runID := "test-run-list-" + time.Now().Format(time.RFC3339Nano)
+	t.Cleanup(func() {
+		a.Pool.Exec(context.Background(), `DELETE FROM run_events WHERE run_id = $1`, runID)
+	})
+
+	for _, ev := range []conductor.TransitionEvent{
+		{RunID: runID, Workflow: "issue-to-pr-claude-only", FromStep: "", ToStep: "plan"},
+		{RunID: runID, Workflow: "issue-to-pr-claude-only", FromStep: "plan", ToStep: "REVIEW_PENDING", Outcome: "escalate", Produced: map[string]any{"verdict": "escalate"}},
+	} {
+		if err := a.RecordEvent(ctx, ev); err != nil {
+			t.Fatalf("RecordEvent: %v", err)
+		}
+	}
+
+	got, err := ListRunEvents(ctx, a.Pool, runID)
+	if err != nil {
+		t.Fatalf("ListRunEvents: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(events) = %d, want 2", len(got))
+	}
+	if got[0].ToStep != "plan" || got[1].ToStep != "REVIEW_PENDING" {
+		t.Errorf("event order = %q, %q; want plan, REVIEW_PENDING", got[0].ToStep, got[1].ToStep)
+	}
+	if got[1].Summary != "Verdict: escalate" {
+		t.Errorf("summary = %q, want %q", got[1].Summary, "Verdict: escalate")
+	}
+}
+
 // TestRecordEventLeavesProducedNullWhenEmpty guards the NULLIF-style
 // convention every other "nothing to show" column already follows here —
 // an empty Produced map must not become a stored "{}" that a reader would

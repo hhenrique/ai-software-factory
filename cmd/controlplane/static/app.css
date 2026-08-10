@@ -239,6 +239,34 @@ body {
   font-size: 1rem;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.compact-select {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  color: var(--color-text);
+  padding: var(--space-1) var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .hint {
   color: var(--color-text-muted);
   font-size: 0.85rem;
@@ -449,6 +477,7 @@ button.link:hover {
 .badge.disabled { color: var(--color-text-muted); }
 .badge.valid { color: var(--color-positive); }
 .badge.invalid { color: var(--color-negative); }
+.badge.failed { color: var(--color-negative); }
 
 .text-negative { color: var(--color-negative); }
 
@@ -465,6 +494,127 @@ button.link:hover {
   padding: var(--space-3);
   font-size: 0.85rem;
 }
+
+/* ---- run detail / human-control surfaces ---- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  background: rgba(2, 6, 23, 0.78);
+}
+
+.modal-dialog {
+  width: min(820px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: calc(var(--radius) + 4px);
+  padding: var(--space-6);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+}
+
+.modal-kicker {
+  color: var(--color-accent);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  margin-bottom: var(--space-2);
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: var(--space-4);
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.modal-subtitle {
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  margin: var(--space-1) 0 0;
+}
+
+.icon-button {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.icon-button:hover { color: var(--color-text); border-color: var(--color-text-muted); }
+.modal-content { padding-top: var(--space-4); }
+.loading-state { color: var(--color-text-muted); padding: var(--space-6) 0; }
+.run-detail-summary { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-4); }
+.modal-failure { margin: 0; font-family: var(--font-mono); font-size: 0.8rem; overflow-wrap: anywhere; }
+.modal-artifacts { display: flex; gap: var(--space-4); margin-bottom: var(--space-4); font-size: 0.8rem; }
+.modal-artifacts a,
+.modal-artifacts a:visited {
+  color: var(--color-accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.modal-artifacts a:hover { color: var(--color-text); }
+
+.run-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-left: 2px solid var(--color-border);
+  padding-left: var(--space-4);
+}
+
+.timeline-event {
+  position: relative;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+}
+
+.timeline-event::before {
+  content: "";
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  border: 2px solid var(--color-surface);
+  left: -22px;
+  top: 15px;
+}
+
+.timeline-event-top { display: flex; justify-content: space-between; gap: var(--space-3); }
+.timeline-event-top time { color: var(--color-text-muted); font-size: 0.75rem; white-space: nowrap; }
+.timeline-summary { white-space: pre-wrap; color: var(--color-text-muted); font-size: 0.8rem; margin: var(--space-2) 0 0; }
+.modal-actions { display: flex; justify-content: flex-end; align-items: center; gap: var(--space-3); margin-top: var(--space-6); }
+
+.field-help { color: var(--color-text-muted); font-size: 0.75rem; }
+.resume-advice { color: var(--color-positive); font-size: 0.8rem; }
+.resume-advice.warning { color: var(--color-negative); }
+.confirmation-check { color: var(--color-text-muted); font-size: 0.78rem; line-height: 1.4; }
+.confirmation-check input { accent-color: var(--color-accent); margin-right: var(--space-2); }
 
 /* ---- workflow graph visualizations (workflow_v1/v2/v3) ---- */
 

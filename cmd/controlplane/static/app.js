@@ -146,6 +146,148 @@ async function apiRequest(path, opts) {
   return res.json();
 }
 
+const TEMPORAL_UI_WORKFLOW_BASE = "http://localhost:8080/namespaces/default/workflows/";
+
+function recommendedResumeStep(item) {
+  // The escalation's originating step is the safest default: it lets the
+  // human make a different choice explicitly instead of silently replaying
+  // an earlier agent step or skipping a deterministic tool step.
+  return item.from_step || item.step_id || "";
+}
+
+function showRunDetails(task) {
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  const dialog = document.createElement("section");
+  dialog.className = "modal-dialog";
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-labelledby", "run-detail-title");
+  dialog.innerHTML = `
+    <div class="modal-kicker">RUN DETAIL</div>
+    <div class="modal-header">
+      <div><h2 id="run-detail-title">${task.run_id || "Run"}</h2><p class="modal-subtitle">Loading the projection timeline…</p></div>
+      <button class="icon-button modal-close" aria-label="Close run detail">×</button>
+    </div>
+    <div class="modal-content"><div class="loading-state">Loading…</div></div>
+  `;
+  backdrop.appendChild(dialog);
+  document.body.appendChild(backdrop);
+  const close = () => backdrop.remove();
+  dialog.querySelector(".modal-close").addEventListener("click", close);
+  backdrop.addEventListener("click", (event) => { if (event.target === backdrop) close(); });
+  const onKey = (event) => { if (event.key === "Escape") { close(); document.removeEventListener("keydown", onKey); } };
+  document.addEventListener("keydown", onKey);
+
+  apiRequest("/api/runs/" + encodeURIComponent(task.run_id))
+    .then((detail) => {
+      const events = detail.events || [];
+      const content = dialog.querySelector(".modal-content");
+      const subtitle = dialog.querySelector(".modal-subtitle");
+      subtitle.textContent = [task.status, task.target_repo, task.workflow].filter(Boolean).join(" · ");
+
+      const header = document.createElement("div");
+      header.className = "run-detail-summary";
+      const status = document.createElement("span");
+      status.className = "badge " + (task.status === "FAILED" ? "failed" : task.status === "COMPLETED" ? "enabled" : "disabled");
+      status.textContent = task.status || "UNKNOWN";
+      header.appendChild(status);
+      if (task.failure_reason) {
+        const failure = document.createElement("p");
+        failure.className = "text-negative modal-failure";
+        failure.textContent = task.failure_reason;
+        header.appendChild(failure);
+      }
+      content.replaceChildren(header);
+
+      const artifacts = document.createElement("div");
+      artifacts.className = "modal-artifacts";
+      const temporalLink = document.createElement("a");
+      temporalLink.href = TEMPORAL_UI_WORKFLOW_BASE + encodeURIComponent(task.run_id);
+      temporalLink.target = "_blank";
+      temporalLink.rel = "noreferrer";
+      temporalLink.textContent = "Open Temporal history";
+      artifacts.appendChild(temporalLink);
+      content.appendChild(artifacts);
+
+      const timeline = document.createElement("div");
+      timeline.className = "run-timeline";
+      if (events.length === 0) {
+        timeline.textContent = "No projected events are available for this Run.";
+      }
+      for (const event of events) {
+        const item = document.createElement("article");
+        item.className = "timeline-event";
+        const top = document.createElement("div");
+        top.className = "timeline-event-top";
+        const transition = document.createElement("strong");
+        transition.textContent = `${event.from_step || "(start)"} → ${event.to_step}`;
+        top.appendChild(transition);
+        const occurred = document.createElement("time");
+        occurred.dateTime = event.occurred_at;
+        occurred.textContent = new Date(event.occurred_at).toLocaleString();
+        top.appendChild(occurred);
+        item.appendChild(top);
+        const meta = document.createElement("div");
+        meta.className = "list-row-meta";
+        meta.textContent = [event.step_id, event.outcome, event.attempt_number ? `attempt ${event.attempt_number}` : ""].filter(Boolean).join(" · ");
+        if (meta.textContent) item.appendChild(meta);
+        if (event.failure_reason) {
+          const failure = document.createElement("p");
+          failure.className = "text-negative";
+          failure.textContent = event.failure_reason;
+          item.appendChild(failure);
+        }
+        if (event.summary) {
+          const summary = document.createElement("p");
+          summary.className = "timeline-summary";
+          summary.textContent = event.summary;
+          item.appendChild(summary);
+        }
+        timeline.appendChild(item);
+      }
+      content.appendChild(timeline);
+
+      const actions = document.createElement("div");
+      actions.className = "modal-actions";
+      if (task.status === "FAILED") {
+        const retry = document.createElement("button");
+        retry.className = "primary";
+        retry.textContent = "Retry task";
+        retry.addEventListener("click", async () => {
+          if (!confirm("Start a fresh Run for this failed Task? The previous Run will remain available in the history.")) return;
+          retry.disabled = true;
+          retry.textContent = "Starting…";
+          try {
+            const created = await apiRequest("/api/tasks/retry", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ task_id: task.task_id }),
+            });
+            close();
+            alert(`Retry started as Run ${created.run_id}.`);
+            location.hash = "#/tasks";
+            window.dispatchEvent(new HashChangeEvent("hashchange"));
+          } catch (err) {
+            retry.disabled = false;
+            retry.textContent = "Retry task";
+            alert(String(err.message || err));
+          }
+        });
+        actions.appendChild(retry);
+      }
+      const done = document.createElement("button");
+      done.className = "link";
+      done.textContent = "Close";
+      done.addEventListener("click", close);
+      actions.appendChild(done);
+      content.appendChild(actions);
+    })
+    .catch((err) => {
+      dialog.querySelector(".modal-content").textContent = String(err.message || err);
+    });
+}
+
 // populateWorkflowSelect fills a <select> from /api/workflows'
 // WorkflowInfo objects — shared by the Repositories view (add form +
 // per-row edit) and the Work view (task create form).
@@ -1185,7 +1327,20 @@ function renderTasks(container) {
   listCard.className = "card";
   const listHeader = document.createElement("div");
   listHeader.className = "card-header";
-  listHeader.innerHTML = `<h2 id="task-count">Tasks</h2>`;
+  listHeader.innerHTML = `
+    <h2 id="task-count">Tasks</h2>
+    <div class="header-actions">
+      <label class="sr-only" for="task-status-filter">Filter tasks by status</label>
+      <select id="task-status-filter" class="compact-select">
+        <option value="">All statuses</option>
+        <option value="RUNNING">Running</option>
+        <option value="REVIEW_PENDING">Review pending</option>
+        <option value="FAILED">Failed</option>
+        <option value="COMPLETED">Completed</option>
+        <option value="CANCELLED">Cancelled</option>
+      </select>
+      <button class="link" id="task-refresh">Refresh</button>
+    </div>`;
   listCard.appendChild(listHeader);
   const list = document.createElement("div");
   list.className = "list";
@@ -1196,6 +1351,9 @@ function renderTasks(container) {
   // lookup below — until wrap is attached, its contents aren't part of
   // the live document and getElementById returns null.
   container.appendChild(wrap);
+
+  document.getElementById("task-status-filter").addEventListener("change", () => refresh());
+  document.getElementById("task-refresh").addEventListener("click", () => refresh());
 
   // When the chosen repository has a default_workflow, preselect it (still
   // overridable) so the human sees what will actually run before hitting
@@ -1220,18 +1378,22 @@ function renderTasks(container) {
   }
 
   function renderList(tasks) {
-    document.getElementById("task-count").textContent = `Tasks — ${tasks.length} total`;
+    const filter = document.getElementById("task-status-filter").value;
+    const visible = filter ? tasks.filter((task) => task.status === filter) : tasks;
+    document.getElementById("task-count").textContent = filter
+      ? `Tasks — ${visible.length} ${filter.toLowerCase().replaceAll("_", " ")}`
+      : `Tasks — ${tasks.length} total`;
 
     list.innerHTML = "";
-    if (tasks.length === 0) {
+    if (visible.length === 0) {
       const empty = document.createElement("div");
       empty.className = "empty-state";
-      empty.textContent = "No tasks yet.";
+      empty.textContent = filter ? "No tasks match this status." : "No tasks yet.";
       list.appendChild(empty);
       return;
     }
 
-    for (const task of tasks) {
+    for (const task of visible) {
       list.appendChild(buildTaskRow(task));
     }
   }
@@ -1283,9 +1445,38 @@ function renderTasks(container) {
     const actions = document.createElement("div");
     actions.className = "list-row-actions";
     const badge = document.createElement("span");
-    badge.className = "badge " + (task.status === "QUEUED" ? "disabled" : "enabled");
+    badge.className = "badge " + (task.status === "FAILED" ? "failed" : task.status === "QUEUED" ? "disabled" : "enabled");
     badge.textContent = task.status;
     actions.appendChild(badge);
+    if (task.run_id) {
+      const details = document.createElement("button");
+      details.className = "link";
+      details.textContent = "Details";
+      details.addEventListener("click", () => showRunDetails(task));
+      actions.appendChild(details);
+    }
+    if (task.status === "FAILED" && task.source === "human") {
+      const retry = document.createElement("button");
+      retry.className = "link";
+      retry.textContent = "Retry";
+      retry.addEventListener("click", async () => {
+        if (!confirm("Start a fresh Run for this failed Task? The previous Run will remain available in the history.")) return;
+        retry.disabled = true;
+        try {
+          const created = await apiRequest("/api/tasks/retry", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ task_id: task.task_id }),
+          });
+          alert(`Retry started as Run ${created.run_id}.`);
+          await refresh();
+        } catch (err) {
+          showError(err);
+          retry.disabled = false;
+        }
+      });
+      actions.appendChild(retry);
+    }
     row.appendChild(actions);
 
     return row;
@@ -1468,6 +1659,16 @@ function renderInbox(container) {
     const actions = document.createElement("div");
     actions.className = "list-row-actions";
 
+    const detailsBtn = document.createElement("button");
+    detailsBtn.className = "link";
+    detailsBtn.textContent = "Details";
+    detailsBtn.addEventListener("click", () => showRunDetails({
+      run_id: item.run_id,
+      status: "REVIEW_PENDING",
+      workflow: item.workflow,
+    }));
+    actions.appendChild(detailsBtn);
+
     const resumeBtn = document.createElement("button");
     resumeBtn.className = "link";
     resumeBtn.textContent = "Resume";
@@ -1524,19 +1725,32 @@ function renderInbox(container) {
     form.className = "field-stack";
     form.innerHTML = `
       <div class="field">
-        <label>Resume at step</label>
+        <label>Resume at step <span class="field-help">(recommended step is preselected)</span></label>
         <select class="resume-step"><option value="">(loading...)</option></select>
       </div>
       <div class="field">
         <label>Hint (free text, passed to the resumed step's context)</label>
         <input type="text" class="resume-hint" placeholder="e.g. what changed, or why to proceed">
       </div>
+      <div class="resume-advice"></div>
+      <label class="confirmation-check"><input type="checkbox" class="resume-confirm"> I reviewed the latest summary and understand this resume will reset the Run's budgets.</label>
     `;
     main.appendChild(form);
     row.appendChild(main);
 
     const stepSelect = form.querySelector(".resume-step");
     const hintInput = form.querySelector(".resume-hint");
+    const advice = form.querySelector(".resume-advice");
+    const confirmCheck = form.querySelector(".resume-confirm");
+    const updateAdvice = () => {
+      const selected = stepSelect.value;
+      const recommended = recommendedResumeStep(item);
+      advice.textContent = selected === recommended
+        ? `Recommended: resume at ${recommended}. This returns to the step that raised the escalation.`
+        : `You selected ${selected || "no step"} instead of the recommended ${recommended}. Confirm that this will not skip required work or repeat edits.`;
+      advice.classList.toggle("warning", selected !== recommended);
+    };
+    stepSelect.addEventListener("change", updateAdvice);
     workflowsReady.then(() => {
       const stepIDs = stepIDsByWorkflow[item.workflow] || [];
       stepSelect.innerHTML = "";
@@ -1546,7 +1760,9 @@ function renderInbox(container) {
         opt.textContent = id;
         stepSelect.appendChild(opt);
       }
-      if (stepIDs.includes(item.from_step)) stepSelect.value = item.from_step;
+      const recommended = recommendedResumeStep(item);
+      if (stepIDs.includes(recommended)) stepSelect.value = recommended;
+      updateAdvice();
     });
 
     const actions = document.createElement("div");
@@ -1559,6 +1775,10 @@ function renderInbox(container) {
       clearError();
       if (!stepSelect.value) {
         showError(new Error("Choose a step to resume at."));
+        return;
+      }
+      if (!confirmCheck.checked) {
+        showError(new Error("Review the summary and confirm that you understand the resume consequences."));
         return;
       }
       confirmBtn.disabled = true;

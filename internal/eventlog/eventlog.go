@@ -11,11 +11,70 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"factory/internal/conductor"
 )
+
+// RunEvent is the projection-store representation used by the Control
+// Plane's run detail view. It deliberately carries the rendered summary
+// rather than exposing the UI to the conductor's Produced map shape.
+type RunEvent struct {
+	ID            int64     `json:"id"`
+	FromStep      string    `json:"from_step"`
+	ToStep        string    `json:"to_step"`
+	StepID        string    `json:"step_id,omitempty"`
+	AttemptNumber int       `json:"attempt_number,omitempty"`
+	TokenDelta    int       `json:"token_delta,omitempty"`
+	ActivityCalls int       `json:"activity_calls,omitempty"`
+	OccurredAt    time.Time `json:"occurred_at"`
+	FailureReason string    `json:"failure_reason,omitempty"`
+	Outcome       string    `json:"outcome,omitempty"`
+	Summary       string    `json:"summary,omitempty"`
+}
+
+// ListRunEvents returns the append-only projection for one Run in display
+// order. The UI uses this instead of making a human open Temporal just to
+// understand the last few transitions.
+func ListRunEvents(ctx context.Context, pool *pgxpool.Pool, runID string) ([]RunEvent, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT id, from_step, to_step, coalesce(step_id, ''), coalesce(attempt_number, 0),
+		       token_delta, activity_calls, occurred_at, coalesce(failure_reason, ''),
+		       coalesce(outcome, ''), produced
+		FROM run_events
+		WHERE run_id = $1
+		ORDER BY occurred_at ASC, id ASC
+	`, runID)
+	if err != nil {
+		return nil, fmt.Errorf("eventlog: list run events: %w", err)
+	}
+	defer rows.Close()
+
+	var out []RunEvent
+	for rows.Next() {
+		var ev RunEvent
+		var producedJSON []byte
+		if err := rows.Scan(&ev.ID, &ev.FromStep, &ev.ToStep, &ev.StepID, &ev.AttemptNumber,
+			&ev.TokenDelta, &ev.ActivityCalls, &ev.OccurredAt, &ev.FailureReason,
+			&ev.Outcome, &producedJSON); err != nil {
+			return nil, fmt.Errorf("eventlog: list run events: scan: %w", err)
+		}
+		if len(producedJSON) > 0 {
+			var produced map[string]any
+			if err := json.Unmarshal(producedJSON, &produced); err != nil {
+				return nil, fmt.Errorf("eventlog: list run events: unmarshal produced: %w", err)
+			}
+			ev.Summary = conductor.FormatEventContent(produced)
+		}
+		out = append(out, ev)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("eventlog: list run events: %w", err)
+	}
+	return out, nil
+}
 
 // Activities holds the projection-store connection pool.
 type Activities struct {

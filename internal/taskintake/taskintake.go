@@ -53,6 +53,10 @@ type Params struct {
 	Description string
 	GitHubIssue int
 
+	// SourceRef preserves provenance when a caller retries an existing
+	// Task from its stored description rather than fetching the issue again.
+	SourceRef backlog.SourceRef
+
 	// RunIDOverride replaces the generated Run id when set — mainly for
 	// callers with their own naming convention or that need idempotent
 	// retries under a fixed id.
@@ -105,7 +109,7 @@ func Submit(ctx context.Context, deps Deps, params Params) (Result, error) {
 	}
 
 	description := params.Description
-	var sourceRef backlog.SourceRef
+	sourceRef := params.SourceRef
 	if params.GitHubIssue != 0 {
 		issue, err := fetchGitHubIssue(repoSlug, params.GitHubIssue)
 		if err != nil {
