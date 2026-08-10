@@ -264,3 +264,51 @@ func workflowGraphHandler(dir string) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, buildWorkflowGraph(def, path))
 	}
 }
+
+// workflowSourceResponse is deliberately just the raw bytes wrapped in
+// JSON (not text/plain) — apiRequest (static/app.js) always calls
+// res.json(), and every other GET here follows that convention.
+type workflowSourceResponse struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+// workflowSourceHandler serves the raw YAML text of one Workflow
+// Definition file, keyed by ?path= — same membership-check pattern and
+// rationale as workflowGraphHandler (a query param, not the trusted
+// directory scan, so checked against listWorkflowFiles rather than
+// os.ReadFile'd directly). Read-only: backs the Workflows view's
+// collapsed-by-default YAML viewer, not an editor — changes still go
+// through git, per docs/04.
+func workflowSourceHandler(dir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Query().Get("path")
+		if path == "" {
+			http.Error(w, "path is required", http.StatusBadRequest)
+			return
+		}
+		files, err := listWorkflowFiles(dir)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		known := false
+		for _, f := range files {
+			if f == path {
+				known = true
+				break
+			}
+		}
+		if !known {
+			http.Error(w, fmt.Sprintf("unknown workflow path %q", path), http.StatusNotFound)
+			return
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, workflowSourceResponse{Path: path, Content: string(data)})
+	}
+}

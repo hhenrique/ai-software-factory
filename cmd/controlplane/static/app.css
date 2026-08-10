@@ -20,6 +20,8 @@
   --color-accent: #60a5fa;
   --color-positive: #3ecf6e;
   --color-negative: #e5533d;
+  --yaml-string: #fbbf24;
+  --yaml-scalar: #c084fc;
 
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -46,6 +48,8 @@
   --color-accent: #3b82f6;
   --color-positive: #16a34a;
   --color-negative: #dc2626;
+  --yaml-string: #b45309;
+  --yaml-scalar: #7c3aed;
 }
 
 * { box-sizing: border-box; }
@@ -239,6 +243,31 @@ body {
   font-size: 1rem;
 }
 
+.card-toggle {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  border-radius: var(--radius);
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.card-toggle:hover {
+  color: var(--color-text);
+  border-color: var(--color-text-muted);
+}
+
+.card-collapsed .card-header {
+  margin-bottom: 0;
+}
+
+.card-collapsed .card-body {
+  display: none;
+}
+
 .header-actions {
   display: flex;
   align-items: center;
@@ -423,6 +452,70 @@ button.link:hover {
   gap: var(--space-3);
   flex-shrink: 0;
 }
+
+/* .list-row-workflow: the Workflows view's row needs a full-width YAML
+   pane below the usual name/actions line, so unlike a plain .list-row it
+   stacks vertically — .list-row-header holds the familiar main+actions
+   line in its own flex row. */
+.list-row-workflow {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.list-row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.yaml-source-wrap.collapsed {
+  display: none;
+}
+
+.yaml-source-wrap {
+  margin-top: var(--space-3);
+}
+
+.yaml-source {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  max-height: 400px;
+  overflow: auto;
+}
+
+.yaml-source-status {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.yaml-lines {
+  margin: 0;
+  padding-left: 3em;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.yaml-lines li {
+  white-space: pre;
+  color: var(--color-text);
+}
+
+.yaml-lines li::marker {
+  color: var(--color-text-muted);
+  user-select: none;
+}
+
+.yaml-key { color: var(--color-accent); font-weight: 600; }
+.yaml-string { color: var(--yaml-string); }
+.yaml-scalar { color: var(--yaml-scalar); }
+.yaml-comment { color: var(--color-text-muted); font-style: italic; }
+.yaml-punct { color: var(--color-text-muted); }
 
 .role-assignments {
   display: flex;

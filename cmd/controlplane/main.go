@@ -106,6 +106,7 @@ func main() {
 	mux.HandleFunc("POST /api/repositories/delete", deleteRepositoryHandler(pool))
 	mux.HandleFunc("GET /api/workflows", listWorkflowsHandler(d.workflowsDir, pool))
 	mux.HandleFunc("GET /api/workflow-graph", workflowGraphHandler(d.workflowsDir))
+	mux.HandleFunc("GET /api/workflow-source", workflowSourceHandler(d.workflowsDir))
 	mux.HandleFunc("GET /api/harnesses", listHarnessesHandler)
 	mux.HandleFunc("GET /api/workers", listWorkersHandler(pool))
 	mux.HandleFunc("POST /api/workers", createWorkerHandler(pool))

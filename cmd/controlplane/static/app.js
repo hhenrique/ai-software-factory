@@ -325,6 +325,188 @@ function populateHarnessSelect(select, harnesses, selected) {
   select.value = selected || harnesses[0] || "";
 }
 
+// makeFormCardCollapsible turns a "create new item" card (Repositories,
+// Workers, Tasks — always .card-header h2 followed by the form itself)
+// into a collapsible one: everything after the header moves into a
+// .card-body that a header toggle button shows/hides. State persists per
+// view in localStorage (same mechanism as the sidebar collapse), so a
+// human who collapses "Add worker" to see more rows below doesn't have
+// it spring back open on every view switch.
+function makeFormCardCollapsible(formCard, storageKey) {
+  const header = formCard.querySelector(".card-header");
+  const body = document.createElement("div");
+  body.className = "card-body";
+  for (const el of Array.from(formCard.children)) {
+    if (el !== header) body.appendChild(el);
+  }
+  formCard.appendChild(body);
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "card-toggle";
+  toggle.setAttribute("aria-label", "Toggle form");
+  header.appendChild(toggle);
+
+  function apply(collapsed) {
+    formCard.classList.toggle("card-collapsed", collapsed);
+    toggle.textContent = collapsed ? "▸" : "▾";
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+  }
+  apply(localStorage.getItem(storageKey) !== "0");
+
+  toggle.addEventListener("click", () => {
+    const collapsed = !formCard.classList.contains("card-collapsed");
+    localStorage.setItem(storageKey, collapsed ? "1" : "0");
+    apply(collapsed);
+  });
+}
+
+// ---- YAML viewer (Workflows view's "View YAML" panel) ----
+//
+// A small hand-rolled line tokenizer, not a real YAML parser: good enough
+// for a read-only viewer of checked-in Workflow Definitions, without
+// vendoring a highlighting library into a project whose static assets
+// ship as one embedded, dependency-free bundle (see cmd/controlplane/
+// static/vendor/ — everything there is a visualization lib with no
+// lightweight syntax-highlighter equivalent worth adding for this one
+// view). Flow collections (`[a, b]`, `{a: b}`) and multi-line block
+// scalars (`|`, `>`) are intentionally left uncolored rather than
+// mis-highlighted — correctness of "what does this say" matters more
+// here than full coverage.
+
+// renderYamlSource builds a line-numbered <ol> from raw YAML text — one
+// <li> per source line (an empty trailing line from the file's final
+// newline is dropped so the numbering matches what's on disk) so line
+// numbers come from list markers instead of a hand-maintained gutter.
+function renderYamlSource(content) {
+  const ol = document.createElement("ol");
+  ol.className = "yaml-lines";
+  const lines = content.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  for (const line of lines) {
+    const li = document.createElement("li");
+    for (const tok of tokenizeYamlLine(line)) {
+      if (tok.cls) {
+        const span = document.createElement("span");
+        span.className = tok.cls;
+        span.textContent = tok.text;
+        li.appendChild(span);
+      } else {
+        li.appendChild(document.createTextNode(tok.text));
+      }
+    }
+    ol.appendChild(li);
+  }
+  return ol;
+}
+
+const YAML_SCALAR_RE = /^(true|false|null|~|yes|no|-?\d+(\.\d+)?)$/i;
+
+// tokenizeYamlLine splits one line into {text, cls} tokens: leading
+// indentation, any "- " list markers, then either a comment, a "key:"
+// pair, or a bare value.
+function tokenizeYamlLine(line) {
+  const tokens = [];
+
+  const indent = line.match(/^\s*/)[0];
+  let rest = line.slice(indent.length);
+  if (indent) tokens.push({ text: indent });
+  if (rest === "") return tokens;
+
+  while (rest === "-" || rest.startsWith("- ")) {
+    const marker = rest === "-" ? "-" : "- ";
+    tokens.push({ text: marker, cls: "yaml-punct" });
+    rest = rest.slice(marker.length);
+  }
+  if (rest === "") return tokens;
+
+  if (rest.startsWith("#")) {
+    tokens.push({ text: rest, cls: "yaml-comment" });
+    return tokens;
+  }
+
+  if (rest.startsWith("---") || rest.startsWith("...")) {
+    tokens.push({ text: rest, cls: "yaml-punct" });
+    return tokens;
+  }
+
+  const key = matchYamlKey(rest);
+  if (key !== null) {
+    tokens.push({ text: key, cls: "yaml-key" });
+    tokens.push({ text: ":", cls: "yaml-punct" });
+    rest = rest.slice(key.length + 1);
+  }
+
+  tokens.push(...tokenizeYamlValue(rest));
+  return tokens;
+}
+
+// matchYamlKey returns the key text (quotes included, if quoted) when
+// rest starts with a "key:" pair — the colon must be followed by
+// whitespace or end-of-line, so a bare value containing ":" (a URL, a
+// "host:port" string) on its own line isn't mistaken for a key.
+function matchYamlKey(rest) {
+  let m = rest.match(/^"[^"]*"(?=:(\s|$))/);
+  if (m) return m[0];
+  m = rest.match(/^'[^']*'(?=:(\s|$))/);
+  if (m) return m[0];
+  m = rest.match(/^[^:#\[\]{}\s][^:]*?(?=:(\s|$))/);
+  if (m) return m[0];
+  return null;
+}
+
+// tokenizeYamlValue handles the text after "key: " (or a whole bare
+// value line): leading spaces, an optional trailing "# comment" (only
+// outside quotes), then the scalar itself.
+function tokenizeYamlValue(rest) {
+  if (rest === "") return [];
+  const tokens = [];
+  const leadingSpace = rest.match(/^\s*/)[0];
+  if (leadingSpace) tokens.push({ text: leadingSpace });
+  let value = rest.slice(leadingSpace.length);
+  if (value === "") return tokens;
+
+  const commentIdx = findYamlCommentStart(value);
+  let commentText = "";
+  if (commentIdx !== -1) {
+    commentText = value.slice(commentIdx);
+    value = value.slice(0, commentIdx);
+  }
+
+  if (value !== "") tokens.push(...tokenizeYamlScalar(value));
+  if (commentText) tokens.push({ text: commentText, cls: "yaml-comment" });
+  return tokens;
+}
+
+function findYamlCommentStart(value) {
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i];
+    if (c === "'" && !inDouble) inSingle = !inSingle;
+    else if (c === '"' && !inSingle) inDouble = !inDouble;
+    else if (c === "#" && !inSingle && !inDouble && (i === 0 || /\s/.test(value[i - 1]))) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function tokenizeYamlScalar(value) {
+  const isQuoted = (value.startsWith('"') && value.endsWith('"') && value.length >= 2) ||
+    (value.startsWith("'") && value.endsWith("'") && value.length >= 2);
+  if (isQuoted) return [{ text: value, cls: "yaml-string" }];
+
+  const trimmed = value.replace(/\s+$/, "");
+  const trailingSpace = value.slice(trimmed.length);
+  if (YAML_SCALAR_RE.test(trimmed)) {
+    const out = [{ text: trimmed, cls: "yaml-scalar" }];
+    if (trailingSpace) out.push({ text: trailingSpace });
+    return out;
+  }
+  return [{ text: value }];
+}
+
 // ---- shared graph-view scaffold (workflow_v1/v2/v3) ----
 
 // buildGraphViewShell is the common chrome every visualization prototype
@@ -483,6 +665,7 @@ function renderRepositories(container) {
     </div>
     <p class="hint">GitHub is the only managed provider in this release.</p>
   `;
+  makeFormCardCollapsible(formCard, "cp-collapse-repo-form");
   wrap.appendChild(formCard);
 
   // Fetched once, reused both by the add-form's select and by every
@@ -818,7 +1001,10 @@ function renderWorkflows(container) {
 
   function buildWorkflowRow(info) {
     const row = document.createElement("div");
-    row.className = "list-row";
+    row.className = "list-row list-row-workflow";
+
+    const rowHeader = document.createElement("div");
+    rowHeader.className = "list-row-header";
 
     const main = document.createElement("div");
     main.className = "list-row-main";
@@ -847,17 +1033,68 @@ function renderWorkflows(container) {
       main.appendChild(buildRolesSection(info));
     }
 
-    row.appendChild(main);
+    rowHeader.appendChild(main);
 
     const actions = document.createElement("div");
     actions.className = "list-row-actions";
+
+    const sourceToggle = document.createElement("button");
+    sourceToggle.className = "link";
+    sourceToggle.textContent = "View YAML";
+    actions.appendChild(sourceToggle);
+
     const badge = document.createElement("span");
     badge.className = "badge " + (info.valid ? "valid" : "invalid");
     badge.textContent = info.valid ? "Valid" : "Invalid";
     actions.appendChild(badge);
-    row.appendChild(actions);
+    rowHeader.appendChild(actions);
+
+    row.appendChild(rowHeader);
+    row.appendChild(buildYamlSourceSection(info, sourceToggle));
 
     return row;
+  }
+
+  // buildYamlSourceSection is the Workflows view's read-only YAML viewer —
+  // collapsed by default, fetched from /api/workflow-source only on first
+  // expand (not for every row up front — some deployments could have many
+  // Workflow Definitions, and most will never be opened in a session).
+  // Read-only by construction: line-numbered <li> text content, not a
+  // <textarea> or contenteditable — YAML changes still go through git,
+  // per docs/04.
+  function buildYamlSourceSection(info, toggle) {
+    const wrap = document.createElement("div");
+    wrap.className = "yaml-source-wrap collapsed";
+    const box = document.createElement("div");
+    box.className = "yaml-source";
+    const status = document.createElement("div");
+    status.className = "yaml-source-status";
+    box.appendChild(status);
+    wrap.appendChild(box);
+
+    let loaded = false;
+    toggle.addEventListener("click", async () => {
+      const collapsed = wrap.classList.contains("collapsed");
+      if (!collapsed) {
+        wrap.classList.add("collapsed");
+        toggle.textContent = "View YAML";
+        return;
+      }
+      wrap.classList.remove("collapsed");
+      toggle.textContent = "Hide YAML";
+      if (loaded) return;
+      status.textContent = "Loading…";
+      try {
+        const res = await apiRequest("/api/workflow-source?path=" + encodeURIComponent(info.path));
+        box.innerHTML = "";
+        box.appendChild(renderYamlSource(res.content));
+        loaded = true;
+      } catch (err) {
+        status.textContent = "Failed to load: " + (err.message || err);
+      }
+    });
+
+    return wrap;
   }
 
   // buildRolesSection renders one row per declared role — a label plus a
@@ -975,6 +1212,7 @@ function renderWorkers(container) {
       <button class="primary" id="wf-submit">+ Add worker</button>
     </div>
   `;
+  makeFormCardCollapsible(formCard, "cp-collapse-worker-form");
   wrap.appendChild(formCard);
 
   const listCard = document.createElement("div");
@@ -1291,6 +1529,7 @@ function renderTasks(container) {
     <p class="hint">Provide exactly one of Description or GitHub issue number. This starts a real Run —
       real harness calls, real API cost — the moment you submit.</p>
   `;
+  makeFormCardCollapsible(formCard, "cp-collapse-task-form");
   wrap.appendChild(formCard);
 
   let repos = [];
