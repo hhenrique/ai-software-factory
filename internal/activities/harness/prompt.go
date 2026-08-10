@@ -11,8 +11,24 @@ import (
 // fields (doc 03: "this is where any harness-specific prompt construction
 // lives" — the harness-agnostic part of it, shared by every adapter;
 // each adapter still owns translating model/effort into its own flags).
-func buildPrompt(in conductor.ActivityInput) string {
+//
+// hasWorktree mirrors Invoke's own cwd decision (doc 03: Planner/Reviewer
+// "judge a task description or an already-produced diff and never touch
+// the worktree"). Without an explicit note, an agentic harness given no
+// real repo tends to go look for one anyway, find an empty temp dir, and
+// escalate the resulting confusion as if the task itself were blocked —
+// this tells it up front that the absence of a checked-out repo is
+// expected, not a problem to report.
+func buildPrompt(in conductor.ActivityInput, hasWorktree bool) string {
 	var b strings.Builder
+
+	if !hasWorktree {
+		b.WriteString("You do not have access to this repository's files in this environment — there is " +
+			"no working directory to explore, and no shell/file/search tool will find a real checkout. " +
+			"This is expected, not an error: base your assessment entirely on the information given below. " +
+			"Do not attempt to read, search, list, or clone files, and do not treat the absence of a " +
+			"checked-out repository itself as a reason to reject or escalate.\n\n")
+	}
 
 	if task, ok := in.Context["task_description"].(string); ok && task != "" {
 		b.WriteString(task)

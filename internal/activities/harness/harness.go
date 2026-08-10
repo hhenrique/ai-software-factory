@@ -93,14 +93,15 @@ func (a *Activities) Invoke(ctx context.Context, in conductor.ActivityInput) (co
 	}
 
 	worktreePath, hasWorktree := in.Context["worktree_path"].(string)
+	hasWorktree = hasWorktree && worktreePath != ""
 	cwd := worktreePath
-	if !hasWorktree || cwd == "" {
+	if !hasWorktree {
 		cwd = os.TempDir()
 	}
 
 	res, err := ad.invoke(ctx, invocation{
 		WorktreePath: cwd,
-		Prompt:       buildPrompt(in),
+		Prompt:       buildPrompt(in, hasWorktree),
 		Model:        in.Model,
 		Effort:       in.Params["effort"],
 	})
