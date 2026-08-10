@@ -244,7 +244,7 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 			recordT(TransitionEvent{
 				RunID: runID, Workflow: def.Workflow, FromStep: step.ID, ToStep: step.OnMalformedOutput,
 				StepID: step.ID, AttemptNumber: attemptNumber, TokenDelta: out.TokensUsed, ActivityCalls: 1,
-				Outcome: "malformed_output", Produced: out.Produced,
+				Outcome: "malformed_output", Produced: out.Produced, AgentStep: step.Type == workflowdef.StepTypeAgent,
 			})
 			currentID = step.OnMalformedOutput
 			continue
@@ -257,7 +257,7 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 		recordT(TransitionEvent{
 			RunID: runID, Workflow: def.Workflow, FromStep: step.ID, ToStep: dest,
 			StepID: step.ID, AttemptNumber: attemptNumber, TokenDelta: out.TokensUsed, ActivityCalls: 1,
-			Outcome: out.Outcome, Produced: out.Produced,
+			Outcome: out.Outcome, Produced: out.Produced, AgentStep: step.Type == workflowdef.StepTypeAgent,
 		})
 		currentID = dest
 	}

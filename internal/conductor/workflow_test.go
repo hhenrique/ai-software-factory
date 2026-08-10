@@ -853,10 +853,15 @@ func TestRunWorkflowPostsTrackerCommentOnceRunHasAPRURL(t *testing.T) {
 }
 
 // TestRunWorkflowPostsTrackerCommentToSourceRefFromTheStart is docs/08's
-// source-side mirror: unlike pr_url (only known once create_pr runs),
-// SourceRef is resolved before the Run even starts (taskintake.Submit), so
-// the very first transition (start -> provision) already has somewhere to
-// post.
+// source-side mirror, curated (per doc08's later "leave only the
+// interactions with the agents... and any human pending action"
+// decision — see shouldPostComment): SourceRef is resolved before the Run
+// even starts (taskintake.Submit), but the Run's own start/provision
+// transitions are routing plumbing, not an agent result or a terminal
+// state, so they don't post. The first real post is execute's own result
+// (the one agent step in dependency-bump-minimal); the last is the Run
+// reaching COMPLETED — also commentable now (a Run's final result is
+// worth knowing about even though it's not a "pending" action).
 func TestRunWorkflowPostsTrackerCommentToSourceRefFromTheStart(t *testing.T) {
 	env := newTestEnv(t)
 	def := mustParseDependencyBumpMinimal(t)
@@ -881,14 +886,65 @@ func TestRunWorkflowPostsTrackerCommentToSourceRefFromTheStart(t *testing.T) {
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
 
-	require.NotEmpty(t, comments)
+	// execute -> verify (the agent result) and create_pr -> COMPLETED (the
+	// Run's final result) — nothing else in this DAG is either.
+	require.Len(t, comments, 2)
 	first := comments[0]
 	require.Equal(t, "github_issue", first.TargetKind)
 	require.Equal(t, "https://github.com/o/r/issues/3", first.TargetRef)
-	require.Contains(t, first.Body, "(start)")
-	// Every later transition keeps posting to the same source too, not
-	// just the first one.
-	require.Greater(t, len(comments), 1)
+	require.Contains(t, first.Body, "execute")
+	last := comments[len(comments)-1]
+	require.Contains(t, last.Body, "COMPLETED")
+}
+
+// TestRunWorkflowIssueCommentLinksToPROnceKnown is the other half of the
+// same curation decision: a human reading the issue can't act on
+// anything without knowing where the PR is, so a terminal-state comment
+// (here, COMPLETED) posted to the source issue includes a link to it
+// whenever pr_url is already known — not just the PR-side comment on the
+// PR itself, which obviously doesn't need to link to itself.
+func TestRunWorkflowIssueCommentLinksToPROnceKnown(t *testing.T) {
+	env := newTestEnv(t)
+	def := mustParseDependencyBumpMinimal(t)
+
+	env.OnActivity("worktree.create", mock.Anything, mock.Anything).Return(conductor.ActivityOutput{}, nil).Once()
+	env.OnActivity(conductor.HarnessInvokeActivityName, mock.Anything, mock.Anything).Return(conductor.ActivityOutput{}, nil).Once()
+	env.OnActivity("run.tests_lint_build", mock.Anything, mock.Anything).Return(conductor.ActivityOutput{Outcome: "pass"}, nil).Once()
+	env.OnActivity("pr.create_and_link", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Produced: map[string]any{"pr_url": "https://github.com/o/r/pull/7"}}, nil).Once()
+
+	var comments []conductor.TrackerCommentInput
+	env.OnActivity(conductor.TrackerPostCommentActivityName, mock.Anything, mock.Anything).
+		Return(func(ctx context.Context, in conductor.TrackerCommentInput) error {
+			comments = append(comments, in)
+			return nil
+		})
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{
+		Definition: def,
+		SourceRef:  conductor.SourceRef{Kind: "github_issue", Ref: "https://github.com/o/r/issues/3"},
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var issueComments []conductor.TrackerCommentInput
+	for _, c := range comments {
+		if c.TargetKind == "github_issue" {
+			issueComments = append(issueComments, c)
+		}
+	}
+	require.NotEmpty(t, issueComments)
+	last := issueComments[len(issueComments)-1]
+	require.Contains(t, last.Body, "COMPLETED")
+	require.Contains(t, last.Body, "PR: https://github.com/o/r/pull/7")
+
+	// The PR-side comment must not link to itself.
+	for _, c := range comments {
+		if c.TargetKind == "github_pr" {
+			require.NotContains(t, c.Body, "PR: https://github.com/o/r/pull/7")
+		}
+	}
 }
 
 // TestRunWorkflowSurvivesTrackerPostCommentFailure is docs/08's "best-

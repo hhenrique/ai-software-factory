@@ -219,3 +219,32 @@ func TestPostTrackerCommentsSkipsWhenNoTargetsResolved(t *testing.T) {
 	// dispatch would nil-panic, so a clean return proves the early skip.
 	postTrackerComments(nil, SourceRef{}, map[string]any{}, TransitionEvent{})
 }
+
+// TestShouldPostComment covers the curated-mirror rule this session
+// added on top of doc08's v1 ("leave only the interactions with the
+// agents... and any human pending action" — plus a Run's own final
+// result, since a clean COMPLETED run would otherwise never mention the
+// PR anywhere in the issue thread).
+func TestShouldPostComment(t *testing.T) {
+	cases := []struct {
+		name string
+		ev   TransitionEvent
+		want bool
+	}{
+		{"agent step result", TransitionEvent{ToStep: "verify", AgentStep: true}, true},
+		{"review_pending", TransitionEvent{ToStep: "REVIEW_PENDING"}, true},
+		{"completed", TransitionEvent{ToStep: "COMPLETED"}, true},
+		{"failed", TransitionEvent{ToStep: "FAILED"}, true},
+		{"cancelled", TransitionEvent{ToStep: "CANCELLED"}, true},
+		{"tool step routing", TransitionEvent{ToStep: "verify", AgentStep: false}, false},
+		{"run start", TransitionEvent{FromStep: "", ToStep: "provision"}, false},
+		{"resume out of REVIEW_PENDING", TransitionEvent{FromStep: "REVIEW_PENDING", ToStep: "plan"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := shouldPostComment(c.ev); got != c.want {
+				t.Errorf("shouldPostComment(%+v) = %v, want %v", c.ev, got, c.want)
+			}
+		})
+	}
+}

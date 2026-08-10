@@ -225,6 +225,18 @@ type TransitionEvent struct {
 	// resume, cancel).
 	Outcome string
 
+	// AgentStep is true only for the transition immediately following a
+	// type: agent step's own successful (non-malformed) Activity call —
+	// i.e. an actual Planner/Coder/Reviewer result, never a tool step's
+	// routing, a budget-exhausted/harness-limit synthetic transition (no
+	// Activity call happened), or the Run-start/resume/cancel bookkeeping
+	// transitions. Not persisted to run_events (internal/eventlog only
+	// extracts specific columns) — purely a same-process signal for
+	// postTrackerComments' filtering (docs/08: "leave only the
+	// interactions with the agents... and any human pending action" —
+	// the ToStep == REVIEW_PENDING check is the other half of that rule).
+	AgentStep bool
+
 	// Produced is the triggering Activity call's Produced fields — nil
 	// for transitions with no Activity call of their own. Persisted
 	// verbatim (see internal/eventlog) so a control-plane surface

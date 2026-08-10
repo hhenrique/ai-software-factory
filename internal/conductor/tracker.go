@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"go.temporal.io/sdk/workflow"
+
+	"factory/internal/workflowdef"
 )
 
 // postTrackerComments best-effort mirrors a transition
@@ -16,19 +18,55 @@ import (
 // Posting failures never fail the Run — see TrackerPostCommentActivityName's
 // Activity implementation for how they're still recorded as a queryable
 // fact rather than silently dropped.
+//
+// Not every transition posts — see shouldPostComment. A human watching
+// the issue wants the agents' results and to know when it's their turn,
+// not routing plumbing (provision starting, a tool step passing, a
+// resume/cancel bookkeeping transition).
 func postTrackerComments(ctx workflow.Context, sourceRef SourceRef, runContext map[string]any, ev TransitionEvent) {
+	if !shouldPostComment(ev) {
+		return
+	}
 	body := formatTransitionComment(ev)
+	prURL, _ := runContext["pr_url"].(string)
 
-	if prURL, _ := runContext["pr_url"].(string); prURL != "" {
+	if prURL != "" {
 		postTrackerComment(ctx, ev, TrackerCommentInput{
 			RunID: ev.RunID, TargetKind: "github_pr", TargetRef: prURL, Body: body,
 		})
 	}
 	if sourceRef.Kind != "" {
+		issueBody := body
+		// A human reading the issue can't see the PR unless we say where
+		// it is — the diff/findings they'd actually act on live there,
+		// not in the issue thread. Added whenever this transition lands
+		// on any terminal-ish state (REVIEW_PENDING included — see
+		// shouldPostComment), not just REVIEW_PENDING specifically: a
+		// Run that reaches COMPLETED or FAILED is just as much "the
+		// human needs to know, and here's where to look" as one parked
+		// waiting on a decision.
+		if workflowdef.IsTerminalState(ev.ToStep) && prURL != "" {
+			issueBody += "\n\nPR: " + prURL
+		}
 		postTrackerComment(ctx, ev, TrackerCommentInput{
-			RunID: ev.RunID, TargetKind: sourceRef.Kind, TargetRef: sourceRef.Ref, Body: body,
+			RunID: ev.RunID, TargetKind: sourceRef.Kind, TargetRef: sourceRef.Ref, Body: issueBody,
 		})
 	}
+}
+
+// shouldPostComment is docs/08's curated mirror content: "leave only the
+// interactions with the agents... and any human pending action" — plus a
+// Run's own final result, the same idea taken to its natural end: an
+// agent step's own result (ev.AgentStep, set by RunWorkflow only for the
+// transition right after a real Planner/Coder/Reviewer Activity call
+// succeeded, malformed or not), or landing on any of doc01's terminal
+// states (REVIEW_PENDING for any reason — an escalate verdict, malformed
+// output, a budget/harness-limit exhaustion — or the Run's true end:
+// COMPLETED, FAILED, CANCELLED). Never routing plumbing: a tool step
+// passing, provision starting, or the resume bookkeeping transition out
+// of REVIEW_PENDING back into a step.
+func shouldPostComment(ev TransitionEvent) bool {
+	return ev.AgentStep || workflowdef.IsTerminalState(ev.ToStep)
 }
 
 // postTrackerComment dispatches one PostComment Activity call, logging

@@ -93,10 +93,39 @@ existing single choke-point that already guarantees every transition,
 including hard failures, gets exactly one `TransitionEvent` recorded —
 gains a second, best-effort sink. After an event lands in the projection
 store, if the Task has a resolved Tracker (PR-side, source-side, or
-both), format a comment from that same event and post it. Every Workflow
-Definition stays tracker-agnostic by construction: a Workflow author
-cannot forget this or misconfigure it, because it was never theirs to
-configure.
+both) *and* the transition is one worth a human seeing (see "Which
+transitions actually post" below), format a comment from that same
+event and post it. Every Workflow Definition stays tracker-agnostic by
+construction: a Workflow author cannot forget this or misconfigure it,
+because it was never theirs to configure.
+
+### Which transitions actually post
+
+Every transition still gets a `TransitionEvent` recorded (the projection
+store stays complete — this filtering is only about the external
+mirror). But posting a comment for *every* one turned out to be noise: a
+tool step passing, `provision` starting, the bookkeeping transition out
+of `REVIEW_PENDING` back into a step — none of that is something a human
+skimming the issue needs to see. What they actually want is the agents'
+own results and to know when it's their turn (or the Run's end).
+Curated down to exactly:
+
+- **An agent step's own result** — the transition immediately following
+  a real Planner/Coder/Reviewer Activity call, whether or not its output
+  was malformed (a bad response is still "the agent responded").
+- **Landing on any of doc01's terminal states** —
+  `REVIEW_PENDING` (an escalate verdict, malformed output, a budget or
+  harness-limit exhaustion — a human needs to act), or the Run's true
+  end (`COMPLETED`, `FAILED`, `CANCELLED` — a human needs to know,
+  even though nothing is pending). A Run that completes cleanly, without
+  ever escalating, would otherwise never mention the PR anywhere in the
+  issue thread at all.
+
+When posting one of these to the *source* (the issue, never the PR
+itself — see "Two integration points" above), the comment includes a
+link to the PR whenever `pr_url` is already known: the diff/findings a
+human would actually act on live there, not in the issue thread, so
+"you need to look at this" is useless without saying where.
 
 ## Content: use what already exists, don't wait on doc03's deferred schema
 
@@ -107,10 +136,22 @@ land on. That's what this doc builds — but the mirror doesn't need to
 wait for that schema. v1 formats what agent steps already produce today:
 `verdict`, `scope_contract`, `findings`, a diff summary (files touched /
 line counts — not the full diff dumped into a comment, which is noise
-for a human skimming an issue thread). The richer narrative content is a
-v2 upgrade to this same mechanism's content, once a harness adapter is
-actually changed to produce it — the mirror and the content it carries
-are separable, and this doc is only the former.
+for a human skimming an issue thread).
+
+Since built, without waiting for a harness *adapter* change as
+originally expected: an `assessment` field on the `plan`/`review` steps'
+`output_schema` (the Planner's understanding of the task and its plan;
+the Reviewer's overall reasoning) and a `rationale` field on
+`coder_response`'s (the Coder's justification for
+address/dispute/escalate/out_of_scope — doc03: "reasoning text when
+verdict: dispute... retained and shown to the Reviewer in the next
+round"). Both optional and additive — a harness that omits them just
+doesn't get that section rendered. What's still deferred to a real v2:
+per-finding rationale (right now a finding is still just
+description/location/scope_classification/severity, no "why" per
+finding), and anything requiring an actual harness *adapter* change
+rather than an `output_schema` addition a Workflow author can make
+directly.
 
 ## Failure semantics: best-effort, never blocks the Run
 
