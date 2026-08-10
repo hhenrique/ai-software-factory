@@ -27,6 +27,56 @@ func TestFormatTransitionCommentIncludesVerdict(t *testing.T) {
 	}
 }
 
+// TestFormatEventContentAssessmentLeadsVerdict is doc03's "structured
+// tracking content per role" (Planner assessment) landing in the same
+// comment doc08's v1 content already posts — assessment must read before
+// the verdict it informed, not buried after routing/scope detail.
+func TestFormatEventContentAssessmentLeadsVerdict(t *testing.T) {
+	got := FormatEventContent(map[string]any{
+		"assessment": "This needs the existing render loop, not a new one.",
+		"verdict":    "proceed",
+	})
+	wantAssessment := strings.Index(got, "Assessment: This needs the existing render loop, not a new one.")
+	wantVerdict := strings.Index(got, "Verdict: proceed")
+	if wantAssessment == -1 || wantVerdict == -1 {
+		t.Fatalf("FormatEventContent = %q, want both Assessment and Verdict present", got)
+	}
+	if wantAssessment > wantVerdict {
+		t.Errorf("FormatEventContent = %q, want Assessment before Verdict", got)
+	}
+}
+
+// TestFormatEventContentRationaleFollowsVerdict is doc03's Coder
+// reasoning ("plus reasoning text when verdict: dispute... retained and
+// shown to the Reviewer in the next round") — rendered as the
+// justification for the verdict, so it reads after it.
+func TestFormatEventContentRationaleFollowsVerdict(t *testing.T) {
+	got := FormatEventContent(map[string]any{
+		"verdict":   "dispute",
+		"rationale": "The flagged line is dead code removed in the same diff, not a leftover.",
+	})
+	wantVerdict := strings.Index(got, "Verdict: dispute")
+	wantRationale := strings.Index(got, "Rationale: The flagged line is dead code removed in the same diff, not a leftover.")
+	if wantVerdict == -1 || wantRationale == -1 {
+		t.Fatalf("FormatEventContent = %q, want both Verdict and Rationale present", got)
+	}
+	if wantVerdict > wantRationale {
+		t.Errorf("FormatEventContent = %q, want Verdict before Rationale", got)
+	}
+}
+
+// TestFormatEventContentOmitsAssessmentAndRationaleWhenAbsent guards
+// backward compatibility: a Workflow Definition whose output_schema
+// doesn't declare these fields (or a harness call that omits them) must
+// render exactly as before — no "Assessment: " / "Rationale: " label
+// with empty content.
+func TestFormatEventContentOmitsAssessmentAndRationaleWhenAbsent(t *testing.T) {
+	got := FormatEventContent(map[string]any{"verdict": "pass"})
+	if strings.Contains(got, "Assessment") || strings.Contains(got, "Rationale") {
+		t.Errorf("FormatEventContent = %q, want no Assessment/Rationale section when absent from produced", got)
+	}
+}
+
 func TestFormatTransitionCommentIncludesScopeContract(t *testing.T) {
 	produced := map[string]any{
 		"scope_contract": map[string]any{

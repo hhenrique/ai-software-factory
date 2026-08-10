@@ -29,7 +29,7 @@ steps:
     type: agent
     role: planner
     context: [task_description]
-    output_schema: { verdict: [proceed, reject, escalate], scope_contract: object }
+    output_schema: { verdict: [proceed, reject, escalate], scope_contract: object, assessment: string }
     on:
       proceed:  execute
       reject:   FAILED
@@ -62,7 +62,7 @@ steps:
     role: reviewer
     context: [scope_contract, diff]
     budget: review_rounds
-    output_schema: { findings: array, verdict: [approved, changes_required] }
+    output_schema: { findings: array, verdict: [approved, changes_required], assessment: string }
     on:
       approved:         create_pr
       changes_required: coder_response
@@ -73,7 +73,7 @@ steps:
     type: agent
     role: coder
     context: [scope_contract, findings, conversation_open_items]
-    output_schema: { verdict: [address, dispute, escalate, out_of_scope] }
+    output_schema: { verdict: [address, dispute, escalate, out_of_scope], rationale: string }
     on:
       address:      revise_review
       dispute:      review

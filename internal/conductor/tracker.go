@@ -61,14 +61,24 @@ func formatTransitionComment(ev TransitionEvent) string {
 	return b.String()
 }
 
-// FormatEventContent renders a transition's Produced fields (verdict,
-// scope_contract, findings, a diff summary) into a compact human-readable
-// block — the same v1 content formatTransitionComment posts externally
-// (docs/08), exported so a control-plane surface (internal/inbox,
-// internal/backlog) can show the same substance for "why is this Run
-// stuck" without needing Temporal's raw history to find it — doc04's
-// "full trace/replay per Run" is non-negotiable even for a minimal build.
-// "" if produced is empty or carries none of these recognized fields.
+// FormatEventContent renders a transition's Produced fields (assessment,
+// verdict, rationale, scope_contract, findings, a diff summary) into a
+// compact human-readable block — the same content formatTransitionComment
+// posts externally (docs/08), exported so a control-plane surface
+// (internal/inbox, internal/backlog) can show the same substance for "why
+// is this Run stuck" without needing Temporal's raw history to find it —
+// doc04's "full trace/replay per Run" is non-negotiable even for a
+// minimal build. "" if produced is empty or carries none of these
+// recognized fields.
+//
+// assessment/rationale are doc03's "structured tracking content per
+// role" (Planner assessment, Coder root-cause/rationale, Reviewer
+// reasoning) — optional narrative fields a step's output_schema can ask
+// for alongside its required routing fields (verdict, findings, ...).
+// Rendering them here is unconditional on their presence in produced, not
+// on which step produced it: nothing here needs to know which role ran:
+// an older Workflow Definition whose output_schema doesn't declare them
+// just never has the key, and this renders exactly as before.
 func FormatEventContent(produced map[string]any) string {
 	var b strings.Builder
 	writeSection := func(s string) {
@@ -81,8 +91,21 @@ func FormatEventContent(produced map[string]any) string {
 		b.WriteString(s)
 	}
 
+	// Assessment leads (context before the decision it informed — a
+	// Planner's understanding of the task and its plan, read before the
+	// verdict that came out of it).
+	if assessment, _ := produced["assessment"].(string); assessment != "" {
+		writeSection("Assessment: " + assessment)
+	}
 	if v, _ := produced["verdict"].(string); v != "" {
 		writeSection("Verdict: " + v)
+	}
+	// Rationale follows the verdict it justifies — a Coder's reasoning
+	// for dispute/address/out_of_scope on a review finding (doc03: "plus
+	// reasoning text when verdict: dispute... retained and shown to the
+	// Reviewer in the next round").
+	if rationale, _ := produced["rationale"].(string); rationale != "" {
+		writeSection("Rationale: " + rationale)
 	}
 	if sc, ok := produced["scope_contract"].(map[string]any); ok {
 		writeSection(formatScopeContract(sc))
