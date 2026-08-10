@@ -11,12 +11,14 @@ import (
 
 // copilotAdapter invokes the GitHub Copilot CLI (`copilot`) non-interactively.
 //
-// UNVERIFIED LIVE as of this writing (no API credits available in this
-// environment to test against). Flags are taken from `copilot --help`;
-// confirm end to end once credits exist, in particular the exact shape of
-// --output-format json's JSONL events (finalTextFromJSONL below is a
-// deliberately lenient/generic scan for exactly that reason — see its doc
-// comment).
+// Confirmed live (real `copilot` CLI v1.0.78, both a plain prompt and an
+// output_schema-style "respond with a fenced json block" prompt): the
+// --output-format json JSONL event shape is
+// {"type": "assistant.message", "data": {"content": "...", "outputTokens": N}}
+// — nested under "data", not top-level, which is what the previous
+// generic top-level key scan missed (found live, Reviewer role: every
+// real call returned Produced: null, TokensUsed: 0 — the scan never
+// matched anything, routing every call to malformed_output).
 type copilotAdapter struct{}
 
 func (copilotAdapter) invoke(ctx context.Context, inv invocation) (invocationResult, error) {
@@ -49,44 +51,61 @@ func (copilotAdapter) invoke(ctx context.Context, inv invocation) (invocationRes
 	}, nil
 }
 
+// copilotEvent is one --output-format json JSONL line's relevant fields —
+// only "assistant.message" events carry a complete (non-streaming-delta)
+// turn's final content and its token count; every other event type
+// (session.*, model.call_start, assistant.message_delta's partial
+// chunks, mcp.*, ...) is irrelevant here and simply won't unmarshal
+// meaningful Data fields, which is fine — the Type check below skips them.
+type copilotEvent struct {
+	Type string `json:"type"`
+	Data struct {
+		Content      string `json:"content"`
+		OutputTokens int    `json:"outputTokens"`
+	} `json:"data"`
+}
+
 // finalTextFromJSONL scans --output-format json's JSONL events for the
-// last one carrying assistant-facing text, checking a few plausible key
-// names since the exact event schema isn't verified live yet — a
-// generic, tolerant scan degrades to an empty result (routed to
-// malformed_output by the caller for schema steps) rather than a parse
-// panic if none of the guessed keys match reality.
+// last "assistant.message" event's content — the complete text of that
+// turn. A multi-turn tool-use call emits one such event per turn
+// (intermediate ones alongside tool requests, the final one once it's
+// done); taking the last one is what "the final answer" means here, same
+// principle as Codex's -o (last message) and Claude's single result
+// object, just via a different mechanism since copilot has neither.
 func finalTextFromJSONL(jsonl []byte) string {
 	var last string
-	scanner := bufio.NewScanner(bytes.NewReader(jsonl))
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for scanner.Scan() {
-		var event map[string]any
-		if json.Unmarshal(scanner.Bytes(), &event) != nil {
-			continue
-		}
-		for _, key := range []string{"content", "text", "message", "response"} {
-			if s, ok := event[key].(string); ok && s != "" {
-				last = s
-			}
+	for _, ev := range scanCopilotEvents(jsonl) {
+		if ev.Type == "assistant.message" && ev.Data.Content != "" {
+			last = ev.Data.Content
 		}
 	}
 	return last
 }
 
+// bestEffortTokenCountFromJSONL sums outputTokens off every
+// "assistant.message" event — an undercount by design (doc03: "a
+// best-effort estimate, clearly flagged as such"): this schema doesn't
+// expose an input-token count anywhere found so far, only output.
 func bestEffortTokenCountFromJSONL(jsonl []byte) int {
 	var total int
+	for _, ev := range scanCopilotEvents(jsonl) {
+		if ev.Type == "assistant.message" {
+			total += ev.Data.OutputTokens
+		}
+	}
+	return total
+}
+
+func scanCopilotEvents(jsonl []byte) []copilotEvent {
+	var events []copilotEvent
 	scanner := bufio.NewScanner(bytes.NewReader(jsonl))
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
-		var event map[string]any
-		if json.Unmarshal(scanner.Bytes(), &event) != nil {
+		var ev copilotEvent
+		if json.Unmarshal(scanner.Bytes(), &ev) != nil {
 			continue
 		}
-		usage, ok := event["usage"].(map[string]any)
-		if !ok {
-			continue
-		}
-		total += intField(usage, "input_tokens") + intField(usage, "output_tokens")
+		events = append(events, ev)
 	}
-	return total
+	return events
 }
