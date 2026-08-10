@@ -50,14 +50,20 @@ func buildPrompt(in conductor.ActivityInput) string {
 	if len(in.OutputSchema) > 0 {
 		schemaJSON, _ := json.MarshalIndent(in.OutputSchema, "", "  ")
 		b.WriteString("Respond with a fenced ```json code block (and nothing else after it) " +
-			"containing an object matching this shape. Each key's value below is either an " +
-			"array of allowed literal strings to choose one from, a TYPE PLACEHOLDER " +
-			"naming what kind of value to put there (e.g. \"object\" means put an actual " +
-			"JSON object there, not the literal string \"object\"; \"array\" means put an " +
-			"actual JSON array there), or an array containing exactly one example object: " +
-			"produce an array of zero or more objects shaped like that example (same field " +
-			"names — do not invent your own), each field value itself following these same " +
-			"placeholder/enum rules:\n")
+			"containing an object matching this shape. Each key's value below tells you what " +
+			"to put there, using one of these conventions:\n" +
+			"- An array of literal strings, e.g. [\"approved\", \"changes_required\"], is an " +
+			"ENUM: pick exactly ONE of them and write it as a plain JSON string value — e.g. " +
+			"\"verdict\": \"approved\" — never as an array, even though the enum itself is " +
+			"shown as one.\n" +
+			"- A bare string naming a JSON type (\"object\", \"array\", \"string\") is a TYPE " +
+			"PLACEHOLDER: put an actual value of that type there, not the literal placeholder " +
+			"text — e.g. \"object\" means put a real JSON object there.\n" +
+			"- An array containing exactly one example object is a SHAPE TEMPLATE: produce an " +
+			"array of zero or more objects shaped like that example (same field names — do " +
+			"not invent your own), each field value itself following these same rules (so an " +
+			"enum field inside the example is still a single string per object, not an " +
+			"array).\n")
 		b.Write(schemaJSON)
 		b.WriteString("\n")
 	}

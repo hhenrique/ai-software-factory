@@ -172,10 +172,10 @@ func formatFindings(findings []any) string {
 		}
 
 		var tags []string
-		if severity, _ := fm["severity"].(string); severity != "" {
+		if severity, ok := scalarString(fm["severity"]); ok && severity != "" {
 			tags = append(tags, severity)
 		}
-		if scope, _ := fm["scope_classification"].(string); scope != "" {
+		if scope, ok := scalarString(fm["scope_classification"]); ok && scope != "" {
 			tags = append(tags, scope)
 		}
 		line := text
@@ -221,4 +221,25 @@ func summarizeDiff(diff string) (files, added, removed int) {
 		}
 	}
 	return files, added, removed
+}
+
+// scalarString extracts a plain string from a parsed JSON value, also
+// accepting a single-element array containing one — found live: a real
+// model (gpt-5-mini, via the copilot CLI) wrapped enum-field values
+// (verdict, and here severity/scope_classification) in a one-element
+// array instead of writing the bare string doc03's schema asks for.
+// internal/activities/harness has the identical helper (for the same
+// reason, applied to Produced["verdict"]) — not shared across packages
+// for one five-line function; see that copy's doc comment for the full
+// story.
+func scalarString(v any) (s string, ok bool) {
+	if s, ok := v.(string); ok {
+		return s, true
+	}
+	if arr, ok := v.([]any); ok && len(arr) == 1 {
+		if s, ok := arr[0].(string); ok {
+			return s, true
+		}
+	}
+	return "", false
 }

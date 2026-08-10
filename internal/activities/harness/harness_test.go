@@ -50,6 +50,10 @@ func TestAdaptersMatchKnownHarnesses(t *testing.T) {
 //     --output-format json result on stdout.
 //   - "schema": prints a claude-shaped result whose "result" field
 //     contains a fenced ```json block.
+//   - "schema-array-verdict": same, but "verdict" is a single-element
+//     array (["approved"]) instead of a bare string — found live from a
+//     real model (gpt-5-mini via the copilot CLI); scalarString exists to
+//     tolerate exactly this.
 //   - "malformed": prints a claude-shaped result whose "result" is plain
 //     text, not JSON.
 //   - "error": prints a claude-shaped result with is_error=true.
@@ -82,6 +86,9 @@ case "$FAKE_CLI_MODE" in
     ;;
   schema-no-verdict)
     echo '{"is_error":false,"result":"Here you go:\n\n` + fence + `json\n{\"scope_contract\":{\"acceptance_criteria\":[\"x\"]}}\n` + fence + `","usage":{"input_tokens":5,"output_tokens":7,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}'
+    ;;
+  schema-array-verdict)
+    echo '{"is_error":false,"result":"` + fence + `json\n{\"verdict\":[\"approved\"]}\n` + fence + `","usage":{"input_tokens":5,"output_tokens":7,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}'
     ;;
   malformed)
     echo '{"is_error":false,"result":"sure, doing that now","usage":{"input_tokens":1,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}'
@@ -151,6 +158,40 @@ func TestInvokeSchemaStepParsesVerdict(t *testing.T) {
 	}
 	if _, ok := out.Produced["scope_contract"]; !ok {
 		t.Errorf("Produced missing scope_contract: %+v", out.Produced)
+	}
+}
+
+// TestInvokeAcceptsSingleElementArrayVerdict is a regression test: a real
+// Reviewer call (gpt-5-mini, via the copilot CLI) returned
+// {"verdict": ["approved"]} for an enum field instead of the bare string
+// output_schema asked for, routing to malformed_output and burning a
+// whole real review round for nothing. scalarString's tolerance for
+// exactly this shape must apply through the full Invoke path, not just
+// in isolation.
+func TestInvokeAcceptsSingleElementArrayVerdict(t *testing.T) {
+	requireGit(t)
+	writeFakeCLI(t, "claude")
+	t.Setenv("FAKE_CLI_MODE", "schema-array-verdict")
+
+	dir := newFixtureWorktree(t)
+	a := &Activities{}
+	out, err := a.Invoke(context.Background(), conductor.ActivityInput{
+		StepID:       "review",
+		Harness:      "claude-code",
+		Context:      map[string]any{"worktree_path": dir},
+		OutputSchema: map[string]any{"verdict": []any{"approved", "changes_required"}},
+	})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if out.Malformed {
+		t.Fatalf("Malformed = true, want false — a single-element array verdict must be tolerated")
+	}
+	if out.Outcome != "approved" {
+		t.Errorf("Outcome = %q, want approved", out.Outcome)
+	}
+	if v, _ := out.Produced["verdict"].(string); v != "approved" {
+		t.Errorf("Produced[verdict] = %v, want the plain string \"approved\" (normalized, not the raw array)", out.Produced["verdict"])
 	}
 }
 

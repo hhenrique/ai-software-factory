@@ -127,12 +127,13 @@ func (a *Activities) Invoke(ctx context.Context, in conductor.ActivityInput) (co
 		// and hard-errored instead of this routing to
 		// on_malformed_output the way doc 03 intends.
 		if _, wantsVerdict := in.OutputSchema["verdict"]; wantsVerdict {
-			v, ok := parsed["verdict"].(string)
+			v, ok := scalarString(parsed["verdict"])
 			if !ok || v == "" {
 				out.Malformed = true
 				return out, nil
 			}
 			out.Outcome = v
+			parsed["verdict"] = v // normalize in Produced too — a single-element-array verdict (see scalarString) should read as a plain string everywhere downstream, not just for routing.
 		}
 	}
 

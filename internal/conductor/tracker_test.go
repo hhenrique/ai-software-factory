@@ -115,6 +115,30 @@ func TestFormatFindingsDropsFindingWithNoUsableText(t *testing.T) {
 	}
 }
 
+// TestFormatFindingsAcceptsSingleElementArraySeverityAndScope is a
+// regression test: a real Reviewer call (gpt-5-mini, via the copilot
+// CLI) returned severity/scope_classification as single-element arrays
+// (["advisory"], ["in_scope"]) instead of bare strings for the same
+// enum-array-schema reason as the verdict bug — formatFindings already
+// degraded safely (silently dropped the tag), but that lost real,
+// available information rather than showing it.
+func TestFormatFindingsAcceptsSingleElementArraySeverityAndScope(t *testing.T) {
+	produced := map[string]any{
+		"findings": []any{
+			map[string]any{
+				"description":          "missing nil check",
+				"location":             "foo.go:12",
+				"severity":             []any{"advisory"},
+				"scope_classification": []any{"in_scope"},
+			},
+		},
+	}
+	got := FormatEventContent(produced)
+	if !strings.Contains(got, "[advisory/in_scope] missing nil check (foo.go:12)") {
+		t.Errorf("FormatEventContent = %q, want severity/scope_classification shown despite the array wrapping", got)
+	}
+}
+
 func TestFormatTransitionCommentIncludesScopeContract(t *testing.T) {
 	produced := map[string]any{
 		"scope_contract": map[string]any{
