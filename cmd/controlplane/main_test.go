@@ -616,19 +616,41 @@ func TestCreateAndListTaskHandlers(t *testing.T) {
 	})
 	// This Task's Run is real (deliberately — see the taskQueue comment
 	// above) and this test never waits for it to reach any particular
-	// state, so it can't know whether it's still executing or already
-	// parked at REVIEW_PENDING by the time the test ends. A cancel signal
-	// is safe to send either way: Temporal buffers it durably until the
-	// workflow actually calls Receive (doc05's signal-wait), so this
-	// still resolves a later escalation even though nothing here waits
-	// for one — and it's a harmless no-op against a Run that already
-	// completed. Without this, an escalated Run here is genuinely
-	// undecidable from the Inbox afterward: its role_assignments and its
-	// one-off workflow YAML (a t.TempDir() file) are both already gone by
-	// the time a human would see it.
+	// state, so cleanup can't know whether it's still executing, parked
+	// at REVIEW_PENDING, or already done by the time the test ends.
+	//
+	// A plain cancel signal alone is not enough: RunWorkflow only
+	// receives on HumanDecisionSignalName while parked at REVIEW_PENDING
+	// (conductor/workflow.go's waitForHumanDecision) — a Run still mid-
+	// execution just leaves that signal buffered and unread, and keeps
+	// running for real (more harness calls, more cost) with nothing left
+	// to make sense of it once role_assignments/the worker/the one-off
+	// workflow YAML this test created are already gone. Found live: five
+	// such Runs sat open on Temporal, invisible to the Inbox (they never
+	// got far enough to record even one transition), until terminated by
+	// hand.
+	//
+	// So: try the graceful signal first (produces a clean CANCELLED
+	// run_events row if the Run is already at REVIEW_PENDING), then
+	// unconditionally hard-terminate via the Temporal client itself —
+	// this works regardless of what state the Run is in and doesn't wait
+	// on it. Terminate bypasses RunWorkflow's own code, so it never
+	// records its own terminal transition; write one directly so a Run
+	// that *had* reached REVIEW_PENDING can't linger in the Inbox as a
+	// phantom entry pointing at a workflow that no longer exists.
 	t.Cleanup(func() {
-		if err := inbox.SignalCancel(context.Background(), temporal, created.RunID); err != nil {
+		ctx := context.Background()
+		if err := inbox.SignalCancel(ctx, temporal, created.RunID); err != nil {
 			t.Logf("cleanup: signal cancel run %q: %v", created.RunID, err)
+		}
+		if err := temporal.TerminateWorkflow(ctx, created.RunID, "", "test cleanup: TestCreateAndListTaskHandlers"); err != nil {
+			t.Logf("cleanup: terminate run %q: %v", created.RunID, err)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO run_events (run_id, workflow, from_step, to_step, occurred_at)
+			VALUES ($1, $2, '', 'CANCELLED', now())
+		`, created.RunID, workflowName); err != nil {
+			t.Logf("cleanup: record terminal run_events row for %q: %v", created.RunID, err)
 		}
 	})
 
