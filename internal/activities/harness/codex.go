@@ -13,12 +13,12 @@ import (
 
 // codexAdapter invokes the Codex CLI (`codex exec`) non-interactively.
 //
-// UNVERIFIED LIVE as of this writing (no API credits available in this
-// environment to test against — see internal/activities/harness's
-// package-level notes/commit history). Flags are taken from `codex exec
-// --help` and this machine's own ~/.codex/config.toml (which already has
-// model_reasoning_effort set, confirming that's a real config key, not
-// guessed) — confirm end to end once credits exist.
+// Reviewer-role invocation confirmed live; Coder/Planner still
+// unverified (no API credits available in this environment — see
+// internal/activities/harness's package-level notes/commit history).
+// Flags otherwise taken from `codex exec --help` and this machine's own
+// ~/.codex/config.toml (which already has model_reasoning_effort set,
+// confirming that's a real config key, not guessed).
 type codexAdapter struct{}
 
 func (codexAdapter) invoke(ctx context.Context, inv invocation) (invocationResult, error) {
@@ -33,6 +33,18 @@ func (codexAdapter) invoke(ctx context.Context, inv invocation) (invocationResul
 		"exec",
 		"--json",
 		"--sandbox", "workspace-write",
+		// Planner/Reviewer calls run with a harmless temp-dir cwd (doc03:
+		// they judge a task description or an already-produced diff,
+		// never touch the worktree — see harness.go's hasWorktree check),
+		// which isn't a git repo at all. Codex's own trust check refuses
+		// to run outside one without this flag — found live (Reviewer
+		// role): "Not inside a trusted directory and
+		// --skip-git-repo-check was not specified." Applied
+		// unconditionally, including for Coder-role calls that do run in
+		// a real worktree: the factory's own scope enforcement (doc03's
+		// contract) doesn't rely on Codex's own git-trust heuristic, so
+		// there's nothing this bypasses that matters here.
+		"--skip-git-repo-check",
 		"-C", inv.WorktreePath,
 		"-o", lastMsgFile,
 	}
