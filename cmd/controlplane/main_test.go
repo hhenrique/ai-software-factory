@@ -614,6 +614,23 @@ func TestCreateAndListTaskHandlers(t *testing.T) {
 			t.Logf("cleanup backlog_tasks delete(%q): %v", created.TaskID, err)
 		}
 	})
+	// This Task's Run is real (deliberately — see the taskQueue comment
+	// above) and this test never waits for it to reach any particular
+	// state, so it can't know whether it's still executing or already
+	// parked at REVIEW_PENDING by the time the test ends. A cancel signal
+	// is safe to send either way: Temporal buffers it durably until the
+	// workflow actually calls Receive (doc05's signal-wait), so this
+	// still resolves a later escalation even though nothing here waits
+	// for one — and it's a harmless no-op against a Run that already
+	// completed. Without this, an escalated Run here is genuinely
+	// undecidable from the Inbox afterward: its role_assignments and its
+	// one-off workflow YAML (a t.TempDir() file) are both already gone by
+	// the time a human would see it.
+	t.Cleanup(func() {
+		if err := inbox.SignalCancel(context.Background(), temporal, created.RunID); err != nil {
+			t.Logf("cleanup: signal cancel run %q: %v", created.RunID, err)
+		}
+	})
 
 	req = httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
 	rec = httptest.NewRecorder()
