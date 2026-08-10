@@ -35,10 +35,49 @@ function renderNav() {
     const a = document.createElement("a");
     a.href = "#/" + id;
     a.className = "nav-item" + (id === active ? " active" : "");
-    a.textContent = view.label;
+
+    const label = document.createElement("span");
+    label.textContent = view.label;
+    a.appendChild(label);
+
+    if (id === "inbox") {
+      const badge = document.createElement("span");
+      badge.className = "nav-badge";
+      badge.id = "nav-inbox-badge";
+      badge.style.display = "none";
+      a.appendChild(badge);
+    }
+
     li.appendChild(a);
     list.appendChild(li);
   }
+  refreshInboxBadge();
+}
+
+// refreshInboxBadge fetches the current pending-action count for the nav
+// item's badge — called on every renderNav (so it's current no matter
+// which view is open) and again after any Inbox action that changes the
+// count (resume/cancel), so it doesn't wait for the next navigation to
+// catch up. Silently no-ops on failure (leaves whatever count was last
+// shown) rather than erroring on views that have nothing to do with the
+// Inbox.
+async function refreshInboxBadge() {
+  const badge = document.getElementById("nav-inbox-badge");
+  if (!badge) return;
+  let pending;
+  try {
+    pending = await apiRequest("/api/inbox");
+  } catch (err) {
+    return;
+  }
+  const count = (pending || []).length;
+  // Re-fetch a fresh reference: an intervening navigation may have
+  // re-rendered the nav (and thus this badge element) while this
+  // request was in flight.
+  const current = document.getElementById("nav-inbox-badge");
+  if (!current) return;
+  current.textContent = String(count);
+  current.style.display = count > 0 ? "" : "none";
 }
 
 function renderView() {
@@ -1185,6 +1224,19 @@ function renderTasks(container) {
       main.appendChild(reason);
     }
 
+    // What the latest step actually produced (a Planner's verdict and
+    // scope_contract, a Reviewer's findings, a diff summary) — same
+    // content doc08's tracker mirror posts externally, shown here too so
+    // "why is this Task stuck" doesn't require reading Temporal's raw
+    // history (empty for most COMPLETED/RUNNING tasks, since a plain
+    // pass/fail tool-step outcome carries none of these fields).
+    if (task.summary) {
+      const summary = document.createElement("div");
+      summary.className = "list-row-summary";
+      summary.textContent = task.summary;
+      main.appendChild(summary);
+    }
+
     row.appendChild(main);
 
     const actions = document.createElement("div");
@@ -1293,8 +1345,8 @@ function renderInbox(container) {
 
   const hint = document.createElement("p");
   hint.className = "hint";
-  hint.textContent = "Runs currently parked at REVIEW_PENDING, oldest first. This is not a general Run browser — " +
-    "see the Temporal UI for full trace/replay.";
+  hint.textContent = "Runs currently parked at REVIEW_PENDING, oldest first, with the escalating step's verdict/findings shown inline. " +
+    "This is not a full transcript (that's still only in the Temporal UI) — just the last step's outcome.";
   wrap.appendChild(hint);
 
   container.appendChild(wrap);
@@ -1352,11 +1404,24 @@ function renderInbox(container) {
     main.appendChild(name);
     const meta = document.createElement("div");
     meta.className = "list-row-meta";
-    const bits = [item.workflow, "escalated from " + item.from_step];
+    const bits = [item.workflow, "escalated from " + item.from_step + (item.outcome ? " (" + item.outcome + ")" : "")];
     if (item.attempt_number) bits.push("attempt " + item.attempt_number);
     bits.push(humanizeAge(item.occurred_at));
     meta.textContent = bits.join("  ·  ");
     main.appendChild(meta);
+
+    // What the escalating step actually produced (a Planner's verdict
+    // and scope_contract, a Reviewer's findings, a diff summary) — the
+    // same content doc08's tracker mirror posts externally, shown here
+    // too so a human can decide resume-vs-cancel without reading
+    // Temporal's raw history to find out why this escalated.
+    if (item.summary) {
+      const summary = document.createElement("div");
+      summary.className = "list-row-summary";
+      summary.textContent = item.summary;
+      main.appendChild(summary);
+    }
+
     row.appendChild(main);
 
     const actions = document.createElement("div");
@@ -1384,6 +1449,7 @@ function renderInbox(container) {
           body: JSON.stringify({ run_id: item.run_id }),
         });
         await refresh();
+        refreshInboxBadge();
       } catch (err) {
         showError(err);
         cancelBtn.disabled = false;
@@ -1405,6 +1471,13 @@ function renderInbox(container) {
     name.className = "list-row-name";
     name.textContent = item.run_id;
     main.appendChild(name);
+
+    if (item.summary) {
+      const summary = document.createElement("div");
+      summary.className = "list-row-summary";
+      summary.textContent = item.summary;
+      main.appendChild(summary);
+    }
 
     const form = document.createElement("div");
     form.className = "field-stack";
@@ -1459,6 +1532,7 @@ function renderInbox(container) {
           }),
         });
         await refresh();
+        refreshInboxBadge();
       } catch (err) {
         showError(err);
         confirmBtn.disabled = false;
