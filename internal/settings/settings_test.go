@@ -30,16 +30,25 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-func uniqueKey(t *testing.T) string {
+// uniqueKey also registers a best-effort cleanup that deletes any row
+// this key ends up backing (a no-op if Set was never called for it) —
+// every test in this file must go through this, not a bare timestamp
+// string, so the settings table never accumulates "test-key-..." rows
+// from routine `go test` runs.
+func uniqueKey(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
-	return "test-key-" + time.Now().Format(time.RFC3339Nano)
+	key := "test-key-" + time.Now().Format(time.RFC3339Nano)
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM settings WHERE key = $1`, key)
+	})
+	return key
 }
 
 func TestGetUnsetKeyReturnsNotOK(t *testing.T) {
 	pool := requirePool(t)
 	ctx := context.Background()
 
-	_, ok, err := Get(ctx, pool, uniqueKey(t))
+	_, ok, err := Get(ctx, pool, uniqueKey(t, pool))
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -51,7 +60,7 @@ func TestGetUnsetKeyReturnsNotOK(t *testing.T) {
 func TestSetThenGet(t *testing.T) {
 	pool := requirePool(t)
 	ctx := context.Background()
-	key := uniqueKey(t)
+	key := uniqueKey(t, pool)
 
 	if _, err := Set(ctx, pool, key, "/data/factory"); err != nil {
 		t.Fatalf("Set: %v", err)
@@ -72,7 +81,7 @@ func TestSetThenGet(t *testing.T) {
 func TestSetIsUpsert(t *testing.T) {
 	pool := requirePool(t)
 	ctx := context.Background()
-	key := uniqueKey(t)
+	key := uniqueKey(t, pool)
 
 	if _, err := Set(ctx, pool, key, "first"); err != nil {
 		t.Fatalf("first Set: %v", err)
@@ -93,7 +102,7 @@ func TestSetIsUpsert(t *testing.T) {
 func TestListIncludesSetKey(t *testing.T) {
 	pool := requirePool(t)
 	ctx := context.Background()
-	key := uniqueKey(t)
+	key := uniqueKey(t, pool)
 
 	if _, err := Set(ctx, pool, key, "value"); err != nil {
 		t.Fatalf("Set: %v", err)

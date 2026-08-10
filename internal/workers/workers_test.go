@@ -35,6 +35,18 @@ func uniqueName(t *testing.T) string {
 	return "test-worker-" + time.Now().Format(time.RFC3339Nano)
 }
 
+// cleanupWorker registers a best-effort delete of id once the test ends
+// (or no-ops with ErrNotFound if the test already deleted it itself) —
+// every test in this file that creates a real row must call this right
+// after Create, so the control plane's Workers view never accumulates
+// "test-worker-..." rows from routine `go test` runs.
+func cleanupWorker(t *testing.T, pool *pgxpool.Pool, id int64) {
+	t.Helper()
+	t.Cleanup(func() {
+		Delete(context.Background(), pool, id)
+	})
+}
+
 func TestCreateThenGetRoundTripsParams(t *testing.T) {
 	pool := requirePool(t)
 	ctx := context.Background()
@@ -44,6 +56,7 @@ func TestCreateThenGetRoundTripsParams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	cleanupWorker(t, pool, created.ID)
 	if created.ID == 0 {
 		t.Errorf("Create: ID = 0, want a real id")
 	}
@@ -68,6 +81,7 @@ func TestCreateWithNilParams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	cleanupWorker(t, pool, created.ID)
 	if created.Params == nil || len(created.Params) != 0 {
 		t.Errorf("Create with nil params: Params = %+v, want empty non-nil map", created.Params)
 	}
@@ -88,9 +102,11 @@ func TestCreateDuplicateNameErrors(t *testing.T) {
 	ctx := context.Background()
 	name := uniqueName(t)
 
-	if _, err := Create(ctx, pool, name, "claude-code", "sonnet", nil); err != nil {
+	created, err := Create(ctx, pool, name, "claude-code", "sonnet", nil)
+	if err != nil {
 		t.Fatalf("first Create: %v", err)
 	}
+	cleanupWorker(t, pool, created.ID)
 	if _, err := Create(ctx, pool, name, "claude-code", "sonnet", nil); err == nil {
 		t.Fatalf("expected an error creating a duplicate name")
 	}
@@ -101,9 +117,11 @@ func TestListIncludesCreatedWorker(t *testing.T) {
 	ctx := context.Background()
 	name := uniqueName(t)
 
-	if _, err := Create(ctx, pool, name, "claude-code", "sonnet", nil); err != nil {
+	created, err := Create(ctx, pool, name, "claude-code", "sonnet", nil)
+	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	cleanupWorker(t, pool, created.ID)
 
 	all, err := List(ctx, pool)
 	if err != nil {
@@ -129,6 +147,7 @@ func TestUpdateChangesFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	cleanupWorker(t, pool, created.ID)
 
 	newName := name + "-renamed"
 	updated, err := Update(ctx, pool, created.ID, newName, "claude-code", "opus", map[string]string{"effort": "high"})
@@ -188,6 +207,12 @@ func TestDeleteInUseReturnsErrInUse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	// Registered before the role_assignments cleanup below: t.Cleanup runs
+	// LIFO, so that one (registered second) deletes the role_assignments
+	// row first, then this deletes the now-unreferenced worker — the
+	// reverse order would hit the same ErrInUse this test is proving,
+	// leaking the worker.
+	cleanupWorker(t, pool, created.ID)
 	workflow := "test-workflow-" + time.Now().Format(time.RFC3339Nano)
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO role_assignments (workflow, role, worker_id) VALUES ($1, 'coder', $2)

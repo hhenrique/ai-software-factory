@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -48,7 +49,10 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 // requireTemporal dials a real local Temporal, skipping if unreachable —
 // tests that use this never need cmd/worker running: ExecuteWorkflow just
 // durably registers the Run with Temporal, and nothing actually executes
-// (no real harness call, no cost) until a worker polls the task queue.
+// (no real harness call, no cost) until a worker polls the task queue. So
+// a test using a private queue (e.g. startInboxTestWorker's tests below)
+// truly costs nothing without cmd/worker running; TestCreateAndListTaskHandlers
+// deliberately breaks that pattern — see its own comment.
 func requireTemporal(t *testing.T) client.Client {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -359,6 +363,10 @@ func TestListWorkersHandlerReflectsRealAssignments(t *testing.T) {
 	if _, err := roleassignment.Set(ctx, pool, workflow, "coder", w.ID); err != nil {
 		t.Fatalf("roleassignment.Set: %v", err)
 	}
+	t.Cleanup(func() {
+		roleassignment.Delete(context.Background(), pool, workflow, "coder")
+		workers.Delete(context.Background(), pool, w.ID)
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/workers", nil)
 	rec := httptest.NewRecorder()
@@ -522,6 +530,12 @@ func TestCreateRepositoryHandlerMalformedBody(t *testing.T) {
 func TestCreateAndListTaskHandlers(t *testing.T) {
 	pool := requirePool(t)
 	temporal := requireTemporal(t)
+
+	// Deliberately the same "factory-conductor" queue cmd/worker polls by
+	// default, not a private one: toy-repo is a real testbench (real
+	// harness calls, a real PR, real cost are expected and fine here) —
+	// if a real worker is running, this Task is meant to actually execute
+	// against it, same as any other real submission.
 	d := &deps{
 		pool:          pool,
 		temporal:      temporal,
@@ -530,32 +544,51 @@ func TestCreateAndListTaskHandlers(t *testing.T) {
 		workflowsDir:  "../../workflows",
 	}
 
+	// A private copy of the real default workflow file under a
+	// test-only workflow name, not "issue-to-pr-claude-only" itself:
+	// role_assignments is keyed by workflow name, and this test's cleanup
+	// unconditionally deletes what it Set — reusing the real production
+	// workflow name would delete its real role assignments too (not
+	// restore whatever was configured before the test ran).
+	workflowName := "cp-task-test-workflow-" + time.Now().Format("20060102T150405.000000000")
+	realYAML, err := os.ReadFile("../../workflows/issue-to-pr-claude-only.yaml")
+	if err != nil {
+		t.Fatalf("read real workflow file: %v", err)
+	}
+	testYAML := strings.Replace(string(realYAML), "workflow: issue-to-pr-claude-only", "workflow: "+workflowName, 1)
+	workflowFile := filepath.Join(t.TempDir(), "workflow.yaml")
+	if err := os.WriteFile(workflowFile, []byte(testYAML), 0o644); err != nil {
+		t.Fatalf("write test workflow file: %v", err)
+	}
+
 	repoName := "github.com/hhenrique/cp-task-test-" + time.Now().Format("20060102T150405.000000000")
 	if _, err := repositories.Insert(context.Background(), pool, repoName,
-		"https://github.com/hhenrique/toy-repo.git", "true", "../../workflows/issue-to-pr-claude-only.yaml", ""); err != nil {
+		"https://github.com/hhenrique/toy-repo.git", "true", workflowFile, ""); err != nil {
 		t.Fatalf("repositories.Insert: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := repositories.Delete(context.Background(), pool, repoName); err != nil {
+			t.Logf("cleanup repositories.Delete(%q): %v", repoName, err)
+		}
+	})
 
 	// taskintake.Submit now resolves every declared role to a Worker via
 	// internal/roleassignment before starting the Run — seed one worker
-	// played across all three roles issue-to-pr-claude-only.yaml declares,
-	// same as any other real submission would need configured first.
+	// played across all three roles the test workflow declares, same as
+	// any other real submission would need configured first.
 	worker, err := workers.Create(context.Background(), pool, "cp-task-test-worker-"+time.Now().Format(time.RFC3339Nano), "claude-code", "sonnet", nil)
 	if err != nil {
 		t.Fatalf("workers.Create: %v", err)
 	}
 	for _, role := range []string{"planner", "coder", "reviewer"} {
-		if _, err := roleassignment.Set(context.Background(), pool, "issue-to-pr-claude-only", role, worker.ID); err != nil {
+		if _, err := roleassignment.Set(context.Background(), pool, workflowName, role, worker.ID); err != nil {
 			t.Fatalf("roleassignment.Set(%s): %v", role, err)
 		}
 	}
-	// Leaves issue-to-pr-claude-only's real role assignments untouched for
-	// whoever configures them for actual use — restore to "unassigned"
-	// rather than leaving this test's disposable worker attached.
 	t.Cleanup(func() {
 		ctx := context.Background()
 		for _, role := range []string{"planner", "coder", "reviewer"} {
-			roleassignment.Delete(ctx, pool, "issue-to-pr-claude-only", role)
+			roleassignment.Delete(ctx, pool, workflowName, role)
 		}
 		workers.Delete(ctx, pool, worker.ID)
 	})
@@ -571,9 +604,16 @@ func TestCreateAndListTaskHandlers(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("create: decode response: %v", err)
 	}
-	if created.TaskID == "" || created.RunID == "" || created.Workflow != "issue-to-pr-claude-only" {
+	if created.TaskID == "" || created.RunID == "" || created.Workflow != workflowName {
 		t.Fatalf("create: unexpected response %+v", created)
 	}
+	// internal/backlog has no exported Delete, so this is test-only
+	// cleanup via direct SQL, not a package API.
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), `DELETE FROM backlog_tasks WHERE task_id = $1`, created.TaskID); err != nil {
+			t.Logf("cleanup backlog_tasks delete(%q): %v", created.TaskID, err)
+		}
+	})
 
 	req = httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
 	rec = httptest.NewRecorder()
@@ -624,6 +664,11 @@ func TestCreateTaskHandlerDisabledRepoReturnsConflict(t *testing.T) {
 		"https://github.com/hhenrique/toy-repo.git", "true", "", ""); err != nil {
 		t.Fatalf("repositories.Insert: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := repositories.Delete(context.Background(), pool, repoName); err != nil {
+			t.Logf("cleanup repositories.Delete(%q): %v", repoName, err)
+		}
+	})
 	if err := repositories.SetEnabled(context.Background(), pool, repoName, false); err != nil {
 		t.Fatalf("SetEnabled: %v", err)
 	}

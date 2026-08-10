@@ -38,13 +38,32 @@ func uniqueWorkflow(t *testing.T) string {
 	return "test-workflow-" + time.Now().Format(time.RFC3339Nano)
 }
 
+// createWorker registers a best-effort delete of the created worker once
+// the test ends. Every call site in this file that later Sets an
+// assignment for it must also call cleanupAssignment right after that
+// Set — registered later, so t.Cleanup's LIFO order deletes the
+// role_assignments row (this worker's Set-created foreign-key reference)
+// before this cleanup tries to delete the worker itself; the reverse
+// order would hit workers.ErrInUse and leak the worker.
 func createWorker(t *testing.T, pool *pgxpool.Pool) int64 {
 	t.Helper()
 	w, err := workers.Create(context.Background(), pool, "test-worker-"+time.Now().Format(time.RFC3339Nano), "claude-code", "sonnet", nil)
 	if err != nil {
 		t.Fatalf("workers.Create: %v", err)
 	}
+	t.Cleanup(func() {
+		workers.Delete(context.Background(), pool, w.ID)
+	})
 	return w.ID
+}
+
+// cleanupAssignment deletes a Set-created role_assignments row once the
+// test ends — see createWorker's doc comment on why call order matters.
+func cleanupAssignment(t *testing.T, pool *pgxpool.Pool, workflow, role string) {
+	t.Helper()
+	t.Cleanup(func() {
+		Delete(context.Background(), pool, workflow, role)
+	})
 }
 
 func TestSetThenListIncludesAssignment(t *testing.T) {
@@ -56,6 +75,7 @@ func TestSetThenListIncludesAssignment(t *testing.T) {
 	if _, err := Set(ctx, pool, workflow, "coder", workerID); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
+	cleanupAssignment(t, pool, workflow, "coder")
 
 	all, err := List(ctx, pool)
 	if err != nil {
@@ -85,6 +105,7 @@ func TestSetIsUpsert(t *testing.T) {
 	if _, err := Set(ctx, pool, workflow, "coder", second); err != nil {
 		t.Fatalf("second Set: %v", err)
 	}
+	cleanupAssignment(t, pool, workflow, "coder")
 
 	resolved, err := Resolve(ctx, pool, workflow, []string{"coder"})
 	if err != nil {
@@ -162,9 +183,11 @@ func TestResolveReturnsHarnessModelParams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workers.Create: %v", err)
 	}
+	t.Cleanup(func() { workers.Delete(context.Background(), pool, w.ID) })
 	if _, err := Set(ctx, pool, workflow, "coder", w.ID); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
+	cleanupAssignment(t, pool, workflow, "coder")
 
 	resolved, err := Resolve(ctx, pool, workflow, []string{"coder"})
 	if err != nil {
@@ -186,6 +209,7 @@ func TestResolveMissingAssignmentListsEveryMissingRole(t *testing.T) {
 	if _, err := Set(ctx, pool, workflow, "coder", workerID); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
+	cleanupAssignment(t, pool, workflow, "coder")
 
 	_, err := Resolve(ctx, pool, workflow, []string{"planner", "coder", "reviewer"})
 	if err == nil {

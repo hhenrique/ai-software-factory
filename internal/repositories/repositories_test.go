@@ -31,15 +31,27 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-func uniqueName(t *testing.T) string {
+// uniqueName also registers a best-effort cleanup that deletes any
+// repository row this name ends up backing — a test's own explicit
+// Delete call still runs fine first; this just mops up whatever's left
+// (or no-ops with ErrNotFound if nothing was ever inserted, e.g. an
+// Insert that was expected to fail). Every test in this file that
+// inserts a real row must go through this, not a bare timestamp string,
+// so the control plane's Repositories view never accumulates
+// "test-repo-..." rows from routine `go test` runs.
+func uniqueName(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
-	return "test-repo-" + time.Now().Format(time.RFC3339Nano)
+	name := "test-repo-" + time.Now().Format(time.RFC3339Nano)
+	t.Cleanup(func() {
+		Delete(context.Background(), pool, name)
+	})
+	return name
 }
 
 func TestInsertThenGet(t *testing.T) {
 	pool := requirePool(t)
 	ctx := context.Background()
-	name := uniqueName(t)
+	name := uniqueName(t, pool)
 
 	inserted, err := Insert(ctx, pool, name, "https://github.com/hhenrique/toy-repo.git", "node --check script.js", "workflows/issue-to-pr-claude-only.yaml", "")
 	if err != nil {
@@ -72,7 +84,7 @@ func TestGetUnknownNameReturnsErrNotFound(t *testing.T) {
 func TestInsertDuplicateNameErrors(t *testing.T) {
 	pool := requirePool(t)
 	ctx := context.Background()
-	name := uniqueName(t)
+	name := uniqueName(t, pool)
 
 	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "", "", ""); err != nil {
 		t.Fatalf("first Insert: %v", err)
@@ -85,7 +97,7 @@ func TestInsertDuplicateNameErrors(t *testing.T) {
 func TestSetEnabledTogglesAndErrorsOnUnknownName(t *testing.T) {
 	pool := requirePool(t)
 	ctx := context.Background()
-	name := uniqueName(t)
+	name := uniqueName(t, pool)
 
 	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "", "", ""); err != nil {
 		t.Fatalf("Insert: %v", err)
@@ -110,7 +122,7 @@ func TestSetEnabledTogglesAndErrorsOnUnknownName(t *testing.T) {
 func TestListIncludesInsertedRepository(t *testing.T) {
 	pool := requirePool(t)
 	ctx := context.Background()
-	name := uniqueName(t)
+	name := uniqueName(t, pool)
 
 	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "", "", ""); err != nil {
 		t.Fatalf("Insert: %v", err)
@@ -134,7 +146,7 @@ func TestListIncludesInsertedRepository(t *testing.T) {
 func TestUpdateChangesTestCommandAndWorkflowNotNameOrCloneURL(t *testing.T) {
 	pool := requirePool(t)
 	ctx := context.Background()
-	name := uniqueName(t)
+	name := uniqueName(t, pool)
 
 	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "old command", "old.yaml", "/old/root"); err != nil {
 		t.Fatalf("Insert: %v", err)
@@ -155,7 +167,7 @@ func TestUpdateChangesTestCommandAndWorkflowNotNameOrCloneURL(t *testing.T) {
 func TestInsertAndUpdateRoundTripWorktreeRoot(t *testing.T) {
 	pool := requirePool(t)
 	ctx := context.Background()
-	name := uniqueName(t)
+	name := uniqueName(t, pool)
 
 	inserted, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "", "", "/data/factory")
 	if err != nil {
@@ -195,7 +207,7 @@ func TestUpdateUnknownNameReturnsErrNotFound(t *testing.T) {
 func TestDeleteThenGetReturnsErrNotFound(t *testing.T) {
 	pool := requirePool(t)
 	ctx := context.Background()
-	name := uniqueName(t)
+	name := uniqueName(t, pool)
 
 	if _, err := Insert(ctx, pool, name, "https://github.com/a/b.git", "", "", ""); err != nil {
 		t.Fatalf("Insert: %v", err)

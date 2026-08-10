@@ -33,9 +33,20 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-func uniqueRepoName(t *testing.T) string {
+// uniqueRepoName also registers a best-effort cleanup that deletes any
+// repositories row this name ends up backing — every test in this file
+// that calls repositories.Insert must go through this, not a bare
+// timestamp string, so the control plane's Repositories view never
+// accumulates "test-repo-..." rows from routine `go test` runs (the same
+// bug this file's own withGlobalRoot/clearGlobalRoot already guard
+// against for the settings table — see their doc comments).
+func uniqueRepoName(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
-	return "test-repo-" + time.Now().Format(time.RFC3339Nano)
+	name := "test-repo-" + time.Now().Format(time.RFC3339Nano)
+	t.Cleanup(func() {
+		repositories.Delete(context.Background(), pool, name)
+	})
+	return name
 }
 
 // withGlobalRoot sets the FactoryRootKey setting for the duration of a
@@ -91,7 +102,7 @@ func TestDBProviderUsesGlobalSettingWhenNoRepoOverride(t *testing.T) {
 	ctx := context.Background()
 	withGlobalRoot(t, pool, "/data/factory")
 
-	repoName := uniqueRepoName(t)
+	repoName := uniqueRepoName(t, pool)
 	if _, err := repositories.Insert(ctx, pool, repoName, "https://github.com/a/b.git", "", "", ""); err != nil {
 		t.Fatalf("repositories.Insert: %v", err)
 	}
@@ -115,7 +126,7 @@ func TestDBProviderRepoOverrideWinsOverGlobal(t *testing.T) {
 	ctx := context.Background()
 	withGlobalRoot(t, pool, "/data/global")
 
-	repoName := uniqueRepoName(t)
+	repoName := uniqueRepoName(t, pool)
 	if _, err := repositories.Insert(ctx, pool, repoName, "https://github.com/a/b.git", "", "", "/data/repo-specific"); err != nil {
 		t.Fatalf("repositories.Insert: %v", err)
 	}
@@ -139,7 +150,7 @@ func TestDBProviderFailsLoudWhenNeitherConfigured(t *testing.T) {
 	ctx := context.Background()
 	clearGlobalRoot(t, pool)
 
-	repoName := uniqueRepoName(t)
+	repoName := uniqueRepoName(t, pool)
 	if _, err := repositories.Insert(ctx, pool, repoName, "https://github.com/a/b.git", "", "", ""); err != nil {
 		t.Fatalf("repositories.Insert: %v", err)
 	}
@@ -180,7 +191,7 @@ func TestDBProviderDifferentRunsGetDifferentWorktreeDirs(t *testing.T) {
 	withGlobalRoot(t, pool, "/data/factory")
 
 	p := DBProvider{Pool: pool}
-	repoName := uniqueRepoName(t)
+	repoName := uniqueRepoName(t, pool)
 	run1, err := p.Paths(ctx, repoName, "run-1")
 	if err != nil {
 		t.Fatalf("Paths: %v", err)
