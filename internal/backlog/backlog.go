@@ -10,9 +10,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"factory/internal/conductor"
@@ -39,6 +41,19 @@ func (a *Activities) Registrations() map[string]any {
 // CreateTask records a new backlog Task and reports its id back into the
 // Run's context as spawned_task_id — doc 01: "The current Run's finding
 // status is recorded as rejected(out_of_scope, spawned=<new task id>)."
+//
+// Deduped on (run_id, description) — deploy/postgres-init/10-backlog-
+// dedup-out-of-scope.sql's unique index, backing an ON CONFLICT DO
+// NOTHING here — because the Reviewer has no memory of findings raised
+// in earlier rounds of the same Run (its context is just [scope_contract,
+// diff]; docs/01's "out_of_scope items ... are not replayed into
+// subsequent rounds" describes pruning that isn't actually implemented
+// yet). Without this, a Reviewer that re-notices the same untouched issue
+// on a later round makes coder_response classify it out_of_scope again,
+// and this Activity would otherwise insert another row for what's really
+// the same finding every time. On a dedup hit, look up and return the
+// already-spawned Task's id rather than erroring — the finding is still
+// correctly recorded as spawned, just pointing at the existing row.
 func (a *Activities) CreateTask(ctx context.Context, in conductor.ActivityInput) (conductor.ActivityOutput, error) {
 	source, _ := in.Context["source"].(string)
 	if source == "" {
@@ -50,8 +65,14 @@ func (a *Activities) CreateTask(ctx context.Context, in conductor.ActivityInput)
 	err := a.Pool.QueryRow(ctx, `
 		INSERT INTO backlog_tasks (task_id, run_id, source, description)
 		VALUES (gen_random_uuid()::text, $1, $2, $3)
+		ON CONFLICT (run_id, description) DO NOTHING
 		RETURNING task_id
 	`, in.RunID, source, description).Scan(&taskID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = a.Pool.QueryRow(ctx, `
+			SELECT task_id FROM backlog_tasks WHERE run_id = $1 AND description = $2
+		`, in.RunID, description).Scan(&taskID)
+	}
 	if err != nil {
 		return conductor.ActivityOutput{}, fmt.Errorf("backlog: create task: %w", err)
 	}

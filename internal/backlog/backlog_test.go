@@ -85,6 +85,95 @@ func TestCreateTaskInsertsRowAndReturnsID(t *testing.T) {
 	}
 }
 
+// TestCreateTaskDedupesSameRunAndDescription is a regression guard for
+// the duplicate-Tasks bug: the Reviewer has no memory of findings raised
+// in earlier rounds of the same Run (see CreateTask's doc comment), so
+// coder_response can dispatch task.create more than once for what's
+// really the same out-of-scope finding. A second call with the same
+// (run_id, description) must return the first call's task_id, not insert
+// a second row.
+func TestCreateTaskDedupesSameRunAndDescription(t *testing.T) {
+	a := requirePool(t)
+	ctx := context.Background()
+
+	runID := "test-run-dedup-" + time.Now().Format(time.RFC3339Nano)
+	in := conductor.ActivityInput{
+		RunID: runID,
+		Context: map[string]any{
+			"source":           "review-finding",
+			"task_description": "extract this into a method",
+		},
+	}
+
+	first, err := a.CreateTask(ctx, in)
+	if err != nil {
+		t.Fatalf("first CreateTask: %v", err)
+	}
+	firstID, _ := first.Produced["spawned_task_id"].(string)
+	if firstID == "" {
+		t.Fatalf("expected spawned_task_id on first call, got %+v", first.Produced)
+	}
+	cleanupTask(t, a.Pool, firstID)
+
+	second, err := a.CreateTask(ctx, in)
+	if err != nil {
+		t.Fatalf("second CreateTask: %v", err)
+	}
+	secondID, _ := second.Produced["spawned_task_id"].(string)
+	if secondID != firstID {
+		t.Errorf("second call spawned_task_id = %q, want the same %q as the first call (dedup should reuse it)", secondID, firstID)
+	}
+
+	var count int
+	if err := a.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM backlog_tasks WHERE run_id = $1`, runID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("backlog_tasks rows for run %q = %d, want 1", runID, count)
+	}
+}
+
+// TestCreateTaskAllowsDifferentDescriptionsSameRun is the flip side of
+// the dedup guard: two genuinely different findings raised in the same
+// Run must still both get their own Task, not collapse into one.
+func TestCreateTaskAllowsDifferentDescriptionsSameRun(t *testing.T) {
+	a := requirePool(t)
+	ctx := context.Background()
+
+	runID := "test-run-distinct-" + time.Now().Format(time.RFC3339Nano)
+	first, err := a.CreateTask(ctx, conductor.ActivityInput{
+		RunID: runID,
+		Context: map[string]any{
+			"source":           "review-finding",
+			"task_description": "finding A",
+		},
+	})
+	if err != nil {
+		t.Fatalf("first CreateTask: %v", err)
+	}
+	firstID, _ := first.Produced["spawned_task_id"].(string)
+	cleanupTask(t, a.Pool, firstID)
+
+	second, err := a.CreateTask(ctx, conductor.ActivityInput{
+		RunID: runID,
+		Context: map[string]any{
+			"source":           "review-finding",
+			"task_description": "finding B",
+		},
+	})
+	if err != nil {
+		t.Fatalf("second CreateTask: %v", err)
+	}
+	secondID, _ := second.Produced["spawned_task_id"].(string)
+	cleanupTask(t, a.Pool, secondID)
+
+	if secondID == "" || secondID == firstID {
+		t.Errorf("second call spawned_task_id = %q, want a new id distinct from %q", secondID, firstID)
+	}
+}
+
 func TestCreateTaskDefaultsSourceWhenMissing(t *testing.T) {
 	a := requirePool(t)
 	ctx := context.Background()
