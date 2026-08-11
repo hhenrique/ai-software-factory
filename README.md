@@ -93,6 +93,12 @@ go build -o bin/controlplane ./cmd/controlplane
 
 Open `http://localhost:8082`.
 
+After any further Go or `cmd/controlplane/static/*` change,
+`make restart` (or `scripts/restart.sh`) rebuilds both binaries and
+restarts whichever of the two are currently running — `cmd/controlplane`'s
+static assets are `go:embed`'d into the binary, so a frontend-only change
+needs this too, not just a browser refresh.
+
 Submit a real Task against a registered Repository (real API/harness
 cost — see `cmd/submittask`'s doc comment):
 

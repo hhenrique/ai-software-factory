@@ -3,13 +3,21 @@ COMPOSE := docker compose -f deploy/docker-compose.yaml
 WORKER_BIN := bin/worker
 SMOKETEST_BIN := bin/smoketest
 
-.PHONY: build test smoketest compose-down
+.PHONY: build test smoketest compose-down restart
 
 build:
 	$(GO) build ./...
 
 test:
 	$(GO) test ./...
+
+# restart rebuilds and restarts the locally-running worker + controlplane
+# processes (see scripts/restart.sh) — the loop a local dev cycle needs
+# after any Go or static-asset change, since cmd/controlplane's static
+# assets are go:embed'd into the binary and neither process picks up a
+# rebuild on its own.
+restart:
+	./scripts/restart.sh
 
 $(WORKER_BIN): FORCE
 	$(GO) build -o $(WORKER_BIN) ./cmd/worker
