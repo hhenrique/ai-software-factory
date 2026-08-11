@@ -4,7 +4,8 @@ Status: decided
 Audience: coding agent implementing the MVP; future maintainers
 Companion docs: 01-run-state-machine.md, 02-workflow-definition-schema.md,
 03-roles-and-harness-contract.md, 04-control-plane-mvp-scope.md,
-05-architecture-temporal.md
+05-architecture-temporal.md, 06-workflow-visualizations.md,
+07-glossary.md, 08-tracking-integration.md
 
 ## What this is
 
