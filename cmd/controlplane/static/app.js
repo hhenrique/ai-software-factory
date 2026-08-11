@@ -621,6 +621,7 @@ function tokenizeYamlScalar(value) {
 // access v3/v4 from the Workflows view instead).
 function buildGraphViewShell(container, opts) {
   const wrap = document.createElement("div");
+  wrap.className = "graph-view-shell";
 
   const errorBanner = document.createElement("div");
   errorBanner.className = "error-banner";

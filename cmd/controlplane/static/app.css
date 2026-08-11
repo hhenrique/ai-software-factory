@@ -619,11 +619,28 @@ button.link:hover {
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
 }
 
-/* .modal-dialog-wide: the graph modals (View Cytoscape/BPMN) need real
-   canvas space, not a text-sized dialog — same reasoning
-   .graph-canvas-wrap's own fixed height already applies. */
+/* .modal-dialog-wide: the graph modals (View Cytoscape/BPMN) need as
+   much real canvas space as the viewport allows — a graph that has to
+   shrink to fit a small canvas reads as visibly worse (crowded labels,
+   overlapping edges) purely from having less room, not a rendering
+   regression in either renderer. Small fixed margins, not a percentage
+   cap like the default .modal-dialog uses, and a flex column so
+   .graph-canvas-wrap (below) can fill whatever's left after the header/
+   legend instead of sitting at a fixed height regardless of dialog size. */
 .modal-dialog-wide {
-  width: min(1200px, 96vw);
+  width: calc(100vw - 48px);
+  height: calc(100vh - 48px);
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-dialog-wide .modal-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .modal-kicker {
@@ -755,9 +772,25 @@ button.link:hover {
   --color-cluster-fill: rgba(224, 178, 60, 0.08);
 }
 
+/* .graph-view-shell wraps the error banner + .graph-card inside
+   .modal-content. It needs to be a flex column filling .modal-content's
+   own height, or .graph-card's flex-grow below has nothing to grow into
+   — a plain block div, however tall its flex parent is, only ever sizes
+   to its content. */
+.graph-view-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 .graph-card {
   padding: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 .graph-card .card-header {
@@ -789,7 +822,8 @@ button.link:hover {
 .graph-canvas-wrap {
   position: relative;
   width: 100%;
-  height: 640px;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
   background:
     linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px) 0 0 / 24px 24px,

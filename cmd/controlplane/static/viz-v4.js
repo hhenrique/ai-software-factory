@@ -419,7 +419,11 @@ function vizV4Render(canvas, graph) {
 
   const graphW = Math.max(1, contentRight);
   const graphH = Math.max(1, contentBottom + 40);
-  const fitScale = Math.min(1, (width - 40) / graphW, (height - 40) / graphH);
+  // No upper cap here (unlike an earlier version that capped at 1x) — a
+  // small graph in a large canvas should scale up to fill it, matching
+  // v3/Cytoscape's `fit: true` behavior. d3.zoom's own scaleExtent below
+  // still clamps the final transform, so this can't runaway.
+  const fitScale = Math.min((width - 40) / graphW, (height - 40) / graphH);
   const tx = width / 2 - (contentRight / 2) * fitScale;
   const ty = height / 2 - (contentBottom / 2) * fitScale;
 
