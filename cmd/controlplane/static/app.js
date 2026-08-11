@@ -175,6 +175,16 @@ window.addEventListener("DOMContentLoaded", () => {
   setupSidebarToggle();
   setupThemeToggle();
   renderView();
+  // Badges live in the sidebar, visible regardless of which view is
+  // open — they need their own persistent poll, separate from
+  // activePollTimer (which stopPolling clears on every view switch).
+  // Without this, a badge only updated on navigation (renderNav), so a
+  // human sitting on an unrelated view never saw a new Inbox escalation
+  // or Pending Approval land until they happened to click away and back.
+  setInterval(() => {
+    refreshInboxBadge();
+    refreshPendingApprovalsBadge();
+  }, 5000);
 });
 
 // ---- api helpers ----
