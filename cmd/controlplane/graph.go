@@ -26,7 +26,7 @@ type WorkflowGraph struct {
 	// Clusters lists every real back/forth loop (a strongly connected
 	// component of size > 1) found in the graph — e.g. {verify,
 	// revise_verify} or the larger {review, coder_response,
-	// revise_review, verify} loop issue-to-pr-claude-only.yaml has via
+	// revise_review, verify} loop issue-to-pr.yaml has via
 	// coder_response's "address" path back through revise_review to
 	// verify. See computeClusters.
 	Clusters []GraphCluster `json:"clusters,omitempty"`

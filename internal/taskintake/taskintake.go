@@ -33,11 +33,10 @@ import (
 )
 
 // DefaultWorkflowFile is the fallback when neither a caller-supplied
-// workflow file nor a registered repository's default_workflow is set.
-// Claude-only because Coder/Reviewer in doc 02's reference definition
-// (issue-to-pr-standard) are Codex/Copilot CLI, and this deployment only
-// has Claude Code credits — see that file's own doc comment.
-const DefaultWorkflowFile = "workflows/issue-to-pr-claude-only.yaml"
+// workflow file nor a registered repository's default_workflow is set —
+// see that file's own doc comment for how it relates to doc02's
+// issue-to-pr-standard reference definition.
+const DefaultWorkflowFile = "workflows/issue-to-pr.yaml"
 
 // Params is everything Submit needs beyond its Deps. Repo must already be
 // fully resolved (name, clone URL, test command) — merging an explicit

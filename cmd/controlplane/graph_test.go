@@ -24,7 +24,7 @@ func TestComputeClustersFindsASimpleTwoNodeLoop(t *testing.T) {
 }
 
 func TestComputeClustersMergesOverlappingLoopsIntoOneComponent(t *testing.T) {
-	// Mirrors issue-to-pr-claude-only.yaml's shape: verify<->revise_verify
+	// Mirrors issue-to-pr.yaml's shape: verify<->revise_verify
 	// is one loop, and coder_response's "address" path threads back through
 	// revise_review to verify — sharing the verify node with review's own
 	// loop back through coder_response. Tarjan must merge these into a

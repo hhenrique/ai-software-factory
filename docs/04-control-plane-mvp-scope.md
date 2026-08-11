@@ -285,8 +285,8 @@ This is also the first place a GitHub issue becomes a Task, ahead of the
 "near future: GitHub/tracker integration" this section anticipates —
 today that integration is a human running the CLI with an issue number,
 not a webhook. Verified live against `toy-repo`'s `agent-ready`-labeled
-issues, using `workflows/issue-to-pr-claude-only.yaml` (see that file's
-own doc comment for why it's a separate Workflow Definition from
+issues, using `workflows/issue-to-pr.yaml` (see that file's own doc
+comment for why it's a separate Workflow Definition from
 `issue-to-pr-standard`) — including a real run through the full
 verify/review inner loops (two review rounds, each with a real finding
 addressed) before reaching `COMPLETED` and opening a real PR.

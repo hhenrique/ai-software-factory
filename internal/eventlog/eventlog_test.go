@@ -110,7 +110,7 @@ func TestRecordEventPersistsOutcomeAndProduced(t *testing.T) {
 		"scope_contract": map[string]any{"acceptance_criteria": []any{"a", "b"}},
 	}
 	err := a.RecordEvent(ctx, conductor.TransitionEvent{
-		RunID: runID, Workflow: "issue-to-pr-claude-only", FromStep: "plan", ToStep: "REVIEW_PENDING",
+		RunID: runID, Workflow: "issue-to-pr", FromStep: "plan", ToStep: "REVIEW_PENDING",
 		Outcome: "escalate", Produced: produced,
 	})
 	if err != nil {
@@ -145,8 +145,8 @@ func TestListRunEventsReturnsTimelineAndRenderedSummary(t *testing.T) {
 	})
 
 	for _, ev := range []conductor.TransitionEvent{
-		{RunID: runID, Workflow: "issue-to-pr-claude-only", FromStep: "", ToStep: "plan"},
-		{RunID: runID, Workflow: "issue-to-pr-claude-only", FromStep: "plan", ToStep: "REVIEW_PENDING", Outcome: "escalate", Produced: map[string]any{"verdict": "escalate"}},
+		{RunID: runID, Workflow: "issue-to-pr", FromStep: "", ToStep: "plan"},
+		{RunID: runID, Workflow: "issue-to-pr", FromStep: "plan", ToStep: "REVIEW_PENDING", Outcome: "escalate", Produced: map[string]any{"verdict": "escalate"}},
 	} {
 		if err := a.RecordEvent(ctx, ev); err != nil {
 			t.Fatalf("RecordEvent: %v", err)

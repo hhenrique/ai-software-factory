@@ -115,12 +115,12 @@ func TestListWorkflowFiles(t *testing.T) {
 	}
 	found := false
 	for _, f := range files {
-		if f == "../../workflows/issue-to-pr-claude-only.yaml" {
+		if f == "../../workflows/issue-to-pr.yaml" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("listWorkflowFiles = %v, want it to include issue-to-pr-claude-only.yaml", files)
+		t.Errorf("listWorkflowFiles = %v, want it to include issue-to-pr.yaml", files)
 	}
 }
 
@@ -135,11 +135,11 @@ func TestLoadWorkflowInfoValidFile(t *testing.T) {
 	// same as before harness/model moved to the database. Role enrichment
 	// against a real assignment is covered by
 	// TestListWorkflowInfoEnrichesRolesWithCurrentAssignment below.
-	info := loadWorkflowInfo("../../workflows/issue-to-pr-claude-only.yaml", nil)
+	info := loadWorkflowInfo("../../workflows/issue-to-pr.yaml", nil)
 	if !info.Valid {
 		t.Fatalf("Valid = false, Errors = %v", info.Errors)
 	}
-	if info.Workflow != "issue-to-pr-claude-only" {
+	if info.Workflow != "issue-to-pr" {
 		t.Errorf("Workflow = %q", info.Workflow)
 	}
 	if info.StepCount == 0 {
@@ -228,7 +228,7 @@ func TestBuildWorkflowGraphIncludesTerminalNodesAndSortedEdges(t *testing.T) {
 }
 
 func TestWorkflowGraphHandlerRealFile(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/api/workflow-graph?path=../../workflows/issue-to-pr-claude-only.yaml", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/workflow-graph?path=../../workflows/issue-to-pr.yaml", nil)
 	rec := httptest.NewRecorder()
 	workflowGraphHandler("../../workflows")(rec, req)
 	if rec.Code != http.StatusOK {
@@ -238,7 +238,7 @@ func TestWorkflowGraphHandlerRealFile(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &g); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if g.Workflow != "issue-to-pr-claude-only" {
+	if g.Workflow != "issue-to-pr" {
 		t.Errorf("Workflow = %q", g.Workflow)
 	}
 	if len(g.Nodes) == 0 || len(g.Edges) == 0 {
@@ -397,7 +397,7 @@ func TestCreateListEnableDisableRepositoryHandlers(t *testing.T) {
 	name := "test-controlplane-" + time.Now().Format("20060102T150405.000000000")
 	identity := "github.com/hhenrique/" + name
 
-	createBody := `{"identity":"` + identity + `","test_command":"node --check script.js","default_workflow":"workflows/issue-to-pr-claude-only.yaml"}`
+	createBody := `{"identity":"` + identity + `","test_command":"node --check script.js","default_workflow":"workflows/issue-to-pr.yaml"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/repositories", strings.NewReader(createBody))
 	rec := httptest.NewRecorder()
 	createRepositoryHandler(pool)(rec, req)
@@ -545,17 +545,17 @@ func TestCreateAndListTaskHandlers(t *testing.T) {
 	}
 
 	// A private copy of the real default workflow file under a
-	// test-only workflow name, not "issue-to-pr-claude-only" itself:
+	// test-only workflow name, not "issue-to-pr" itself:
 	// role_assignments is keyed by workflow name, and this test's cleanup
 	// unconditionally deletes what it Set — reusing the real production
 	// workflow name would delete its real role assignments too (not
 	// restore whatever was configured before the test ran).
 	workflowName := "cp-task-test-workflow-" + time.Now().Format("20060102T150405.000000000")
-	realYAML, err := os.ReadFile("../../workflows/issue-to-pr-claude-only.yaml")
+	realYAML, err := os.ReadFile("../../workflows/issue-to-pr.yaml")
 	if err != nil {
 		t.Fatalf("read real workflow file: %v", err)
 	}
-	testYAML := strings.Replace(string(realYAML), "workflow: issue-to-pr-claude-only", "workflow: "+workflowName, 1)
+	testYAML := strings.Replace(string(realYAML), "workflow: issue-to-pr", "workflow: "+workflowName, 1)
 	workflowFile := filepath.Join(t.TempDir(), "workflow.yaml")
 	if err := os.WriteFile(workflowFile, []byte(testYAML), 0o644); err != nil {
 		t.Fatalf("write test workflow file: %v", err)
@@ -880,7 +880,7 @@ func TestListPendingApprovalsHandlerUsesRealWorkflowsDir(t *testing.T) {
 	})
 	if _, err := pool.Exec(context.Background(), `
 		INSERT INTO run_events (run_id, workflow, from_step, to_step, occurred_at, outcome)
-		VALUES ($1, 'issue-to-pr-claude-only', 'plan', 'REVIEW_PENDING', now(), 'proceed')
+		VALUES ($1, 'issue-to-pr', 'plan', 'REVIEW_PENDING', now(), 'proceed')
 	`, runID); err != nil {
 		t.Fatalf("insert run_events: %v", err)
 	}
@@ -905,7 +905,7 @@ func TestListPendingApprovalsHandlerUsesRealWorkflowsDir(t *testing.T) {
 		t.Fatalf("response did not include %q: %+v", runID, got)
 	}
 	if found.ApproveResumeStep != "execute" {
-		t.Errorf("ApproveResumeStep = %q, want %q (from workflows/issue-to-pr-claude-only.yaml's plan step)", found.ApproveResumeStep, "execute")
+		t.Errorf("ApproveResumeStep = %q, want %q (from workflows/issue-to-pr.yaml's plan step)", found.ApproveResumeStep, "execute")
 	}
 }
 

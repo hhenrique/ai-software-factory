@@ -83,7 +83,7 @@ func TestFormatEventContentOmitsAssessmentAndRationaleWhenAbsent(t *testing.T) {
 // real Reviewer call returned {message, severity} instead of doc03's
 // {description, location, scope_classification, severity} — rendering as
 // a content-free "[medium/]  ()" line. The schema now shows an example
-// item (see workflows/issue-to-pr-claude-only.yaml), but this renderer
+// item (see workflows/issue-to-pr.yaml), but this renderer
 // must keep degrading gracefully regardless — a harness's own field
 // naming isn't something this package can fully control.
 func TestFormatFindingsFallsBackToMessageFieldWhenDescriptionAbsent(t *testing.T) {

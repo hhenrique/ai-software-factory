@@ -198,7 +198,7 @@ func TestListSurfacesOutcomeAndSummaryFromLatestEvent(t *testing.T) {
 	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO run_events (run_id, workflow, from_step, to_step, occurred_at, outcome, produced)
-		VALUES ($1, 'issue-to-pr-claude-only', 'plan', 'REVIEW_PENDING', now(), 'escalate', $2)
+		VALUES ($1, 'issue-to-pr', 'plan', 'REVIEW_PENDING', now(), 'escalate', $2)
 	`, runID, producedJSON); err != nil {
 		t.Fatalf("insert run_events: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestListExcludesPendingApprovalsAndViceVersa(t *testing.T) {
 		t.Helper()
 		if _, err := pool.Exec(ctx, `
 			INSERT INTO run_events (run_id, workflow, from_step, to_step, occurred_at, outcome)
-			VALUES ($1, 'issue-to-pr-claude-only', 'plan', 'REVIEW_PENDING', now(), $2)
+			VALUES ($1, 'issue-to-pr', 'plan', 'REVIEW_PENDING', now(), $2)
 		`, runID, outcome); err != nil {
 			t.Fatalf("insert run_events for %q: %v", runID, err)
 		}

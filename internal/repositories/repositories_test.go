@@ -53,7 +53,7 @@ func TestInsertThenGet(t *testing.T) {
 	ctx := context.Background()
 	name := uniqueName(t, pool)
 
-	inserted, err := Insert(ctx, pool, name, "https://github.com/hhenrique/toy-repo.git", "node --check script.js", "workflows/issue-to-pr-claude-only.yaml", "")
+	inserted, err := Insert(ctx, pool, name, "https://github.com/hhenrique/toy-repo.git", "node --check script.js", "workflows/issue-to-pr.yaml", "")
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestInsertThenGet(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	if got.Name != name || got.CloneURL != "https://github.com/hhenrique/toy-repo.git" ||
-		got.TestCommand != "node --check script.js" || got.DefaultWorkflow != "workflows/issue-to-pr-claude-only.yaml" {
+		got.TestCommand != "node --check script.js" || got.DefaultWorkflow != "workflows/issue-to-pr.yaml" {
 		t.Errorf("Get = %+v, unexpected fields", got)
 	}
 }

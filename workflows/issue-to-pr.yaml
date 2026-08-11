@@ -1,16 +1,17 @@
 # A real, deployable Workflow Definition — not a reference/test fixture
 # (those live in internal/workflowdef/fixtures and are embedded for
-# docs/tests, see internal/workflowdef/fixtures.go). This one exists
-# because the factory's only currently-licensed harness is Claude Code:
-# issue-to-pr-standard's example Worker assignments (Coder = codex,
-# Reviewer = copilot) can't run for real without those CLIs' own
-# credits. Same DAG, same budgets, same schemas as issue-to-pr-standard —
-# which harness/model backs each role isn't declared here at all anymore
-# (see roles: below and 03-roles-and-harness-contract.md): it's whichever
-# Worker the control plane's role_assignments currently has playing that
-# role for *this* workflow name, so the actual harness/model difference
-# between this file and issue-to-pr-standard lives entirely outside YAML.
-workflow: issue-to-pr-claude-only
+# docs/tests, see internal/workflowdef/fixtures.go). Same DAG, same
+# budgets, same schemas as that fixture's issue-to-pr-standard — which
+# harness/model backs each role isn't declared here at all (see roles:
+# below and 03-roles-and-harness-contract.md): it's whichever Worker the
+# control plane's role_assignments currently has playing that role for
+# *this* workflow name, edited from the Workflows view, not this file.
+# Was named issue-to-pr-claude-only while Claude Code was the only
+# licensed harness available to run any role for real; renamed once that
+# stopped being true (role_assignments now also runs codex/copilot for
+# real) — the name never described the DAG, only a since-lifted
+# constraint on which Worker could play a role.
+workflow: issue-to-pr
 version: 1
 
 roles: [planner, coder, reviewer]

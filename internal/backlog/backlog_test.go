@@ -202,7 +202,7 @@ func TestInsertHumanTaskThenAttachRun(t *testing.T) {
 	ctx := context.Background()
 
 	wantSourceRef := SourceRef{Kind: "github_issue", Ref: "https://github.com/hhenrique/toy-repo/issues/3"}
-	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr-claude-only", "fix the thing", wantSourceRef)
+	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr", "fix the thing", wantSourceRef)
 	if err != nil {
 		t.Fatalf("InsertHumanTask: %v", err)
 	}
@@ -225,8 +225,8 @@ func TestInsertHumanTaskThenAttachRun(t *testing.T) {
 	if gotRepo != "hhenrique/toy-repo" {
 		t.Errorf("target_repo = %q, want hhenrique/toy-repo", gotRepo)
 	}
-	if gotWorkflow != "issue-to-pr-claude-only" {
-		t.Errorf("workflow = %q, want issue-to-pr-claude-only", gotWorkflow)
+	if gotWorkflow != "issue-to-pr" {
+		t.Errorf("workflow = %q, want issue-to-pr", gotWorkflow)
 	}
 	if gotSource != "human" {
 		t.Errorf("source = %q, want human", gotSource)
@@ -272,7 +272,7 @@ func TestListIncludesInsertedHumanTaskWithEmptyRunIDBeforeAttach(t *testing.T) {
 	ctx := context.Background()
 
 	wantSourceRef := SourceRef{Kind: "github_issue", Ref: "https://github.com/hhenrique/toy-repo/issues/7"}
-	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr-claude-only", "list test "+time.Now().Format(time.RFC3339Nano), wantSourceRef)
+	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr", "list test "+time.Now().Format(time.RFC3339Nano), wantSourceRef)
 	if err != nil {
 		t.Fatalf("InsertHumanTask: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestListIncludesInsertedHumanTaskWithEmptyRunIDBeforeAttach(t *testing.T) {
 	if found.RunID != "" {
 		t.Errorf("RunID = %q, want empty before AttachRun", found.RunID)
 	}
-	if found.TargetRepo != "hhenrique/toy-repo" || found.Workflow != "issue-to-pr-claude-only" {
+	if found.TargetRepo != "hhenrique/toy-repo" || found.Workflow != "issue-to-pr" {
 		t.Errorf("unexpected fields: %+v", found)
 	}
 	if found.Status != "QUEUED" {
@@ -313,7 +313,7 @@ func TestListSurfacesZeroValueSourceRefForFreeTextTask(t *testing.T) {
 	a := requirePool(t)
 	ctx := context.Background()
 
-	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr-claude-only", "free text task "+time.Now().Format(time.RFC3339Nano), SourceRef{})
+	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr", "free text task "+time.Now().Format(time.RFC3339Nano), SourceRef{})
 	if err != nil {
 		t.Fatalf("InsertHumanTask: %v", err)
 	}
@@ -346,7 +346,7 @@ func TestListDerivesStatusFromRunEventsNotStaleColumn(t *testing.T) {
 	a := requirePool(t)
 	ctx := context.Background()
 
-	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr-claude-only", "derive status test "+time.Now().Format(time.RFC3339Nano), SourceRef{})
+	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr", "derive status test "+time.Now().Format(time.RFC3339Nano), SourceRef{})
 	if err != nil {
 		t.Fatalf("InsertHumanTask: %v", err)
 	}
@@ -384,7 +384,7 @@ func TestListDerivesStatusFromRunEventsNotStaleColumn(t *testing.T) {
 	// (same value here, but derived from run_events now, not the column).
 	if _, err := a.Pool.Exec(ctx, `
 		INSERT INTO run_events (run_id, workflow, from_step, to_step, occurred_at)
-		VALUES ($1, 'issue-to-pr-claude-only', 'provision', 'plan', now())
+		VALUES ($1, 'issue-to-pr', 'provision', 'plan', now())
 	`, runID); err != nil {
 		t.Fatalf("insert run_events (plan): %v", err)
 	}
@@ -398,7 +398,7 @@ func TestListDerivesStatusFromRunEventsNotStaleColumn(t *testing.T) {
 	wantReason := "no on: mapping for outcome \"\""
 	if _, err := a.Pool.Exec(ctx, `
 		INSERT INTO run_events (run_id, workflow, from_step, to_step, occurred_at, failure_reason)
-		VALUES ($1, 'issue-to-pr-claude-only', 'plan', 'FAILED', now(), $2)
+		VALUES ($1, 'issue-to-pr', 'plan', 'FAILED', now(), $2)
 	`, runID, wantReason); err != nil {
 		t.Fatalf("insert run_events (FAILED): %v", err)
 	}
@@ -437,7 +437,7 @@ func TestListSurfacesOutcomeAndSummaryFromLatestEvent(t *testing.T) {
 	a := requirePool(t)
 	ctx := context.Background()
 
-	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr-claude-only", "summary test "+time.Now().Format(time.RFC3339Nano), SourceRef{})
+	taskID, err := InsertHumanTask(ctx, a.Pool, "hhenrique/toy-repo", "issue-to-pr", "summary test "+time.Now().Format(time.RFC3339Nano), SourceRef{})
 	if err != nil {
 		t.Fatalf("InsertHumanTask: %v", err)
 	}
@@ -459,7 +459,7 @@ func TestListSurfacesOutcomeAndSummaryFromLatestEvent(t *testing.T) {
 	}
 	if _, err := a.Pool.Exec(ctx, `
 		INSERT INTO run_events (run_id, workflow, from_step, to_step, occurred_at, outcome, produced)
-		VALUES ($1, 'issue-to-pr-claude-only', 'review', 'coder_response', now(), 'changes_required', $2)
+		VALUES ($1, 'issue-to-pr', 'review', 'coder_response', now(), 'changes_required', $2)
 	`, runID, producedJSON); err != nil {
 		t.Fatalf("insert run_events: %v", err)
 	}
