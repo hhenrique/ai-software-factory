@@ -76,6 +76,7 @@ body {
 }
 
 .sidebar {
+  position: relative;
   width: var(--sidebar-width);
   flex-shrink: 0;
   background: var(--color-surface);
@@ -88,6 +89,48 @@ body {
 
 .sidebar.collapsed {
   width: var(--sidebar-width-collapsed);
+}
+
+/* Lighthouse watermark — a pure ::before pseudo-element rather than an
+   HTML node, since it's decorative only. Same mask-image technique as
+   .icon-mask (only the source PNG's alpha channel is read; background-
+   color: currentColor tracks the sidebar's own muted text color, so it's
+   automatically correct in both themes with no separate light/dark
+   asset) — the low opacity is what keeps it a watermark, not a "present"
+   background image sitting on top of the nav. Anchored bottom-left,
+   rotated slightly so it leans rather than standing perfectly upright. */
+.sidebar::before {
+  content: "";
+  position: absolute;
+  left: -12%;
+  bottom: 0;
+  width: 78%;
+  aspect-ratio: 326 / 612;
+  background-color: currentColor;
+  color: var(--color-text-muted);
+  opacity: 0.09;
+  -webkit-mask-image: url("/images/lighthouse-watermark.png");
+  mask-image: url("/images/lighthouse-watermark.png");
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-position: bottom left;
+  mask-position: bottom left;
+  transform: rotate(-7deg);
+  transform-origin: bottom left;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.sidebar.collapsed::before {
+  opacity: 0;
+}
+
+.sidebar-header,
+.nav-list {
+  position: relative;
+  z-index: 1;
 }
 
 .sidebar-header {
