@@ -88,7 +88,7 @@ func postTrackerComment(ctx workflow.Context, ev TransitionEvent, in TrackerComm
 // those still get a bare transition line.
 func formatTransitionComment(ev TransitionEvent) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "**%s → %s**", stepLabel(ev.FromStep), stepLabel(ev.ToStep))
+	fmt.Fprintf(&b, "%s\n**%s → %s**", authorLine(ev), stepLabel(ev.FromStep), stepLabel(ev.ToStep))
 
 	if ev.FailureReason != "" {
 		fmt.Fprintf(&b, "\n\nFailed: %s", ev.FailureReason)
@@ -97,6 +97,25 @@ func formatTransitionComment(ev TransitionEvent) string {
 		fmt.Fprintf(&b, "\n\n%s", content)
 	}
 	return b.String()
+}
+
+// authorLine is the comment's first line: who actually produced this
+// transition. "conductor" for anything tool-owned or with no step at all
+// (Run start, a human resume/cancel, a budget-exhausted/harness-limit
+// check that tripped before an Activity call — see
+// TransitionEvent.Role's doc comment for when these are set at all);
+// "<role>:<harness>/<model>/<effort>" for a real Worker's own call.
+// Effort is omitted when unset — a Worker with no configured effort
+// param shouldn't render a trailing "/" for it.
+func authorLine(ev TransitionEvent) string {
+	if ev.Role == "" {
+		return "conductor"
+	}
+	author := fmt.Sprintf("%s:%s/%s", ev.Role, ev.Harness, ev.Model)
+	if ev.Effort != "" {
+		author += "/" + ev.Effort
+	}
+	return author
 }
 
 // FormatEventContent renders a transition's Produced fields (assessment,

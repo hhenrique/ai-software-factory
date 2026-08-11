@@ -5,9 +5,32 @@ import (
 	"testing"
 )
 
+func TestAuthorLineConductorForToolOwnedTransition(t *testing.T) {
+	got := authorLine(TransitionEvent{FromStep: "verify", ToStep: "review", Outcome: "pass"})
+	if got != "conductor" {
+		t.Errorf("authorLine = %q, want %q for a tool-owned transition (Role unset)", got, "conductor")
+	}
+}
+
+func TestAuthorLineWorkerIdentityForAgentTransition(t *testing.T) {
+	got := authorLine(TransitionEvent{Role: "coder", Harness: "codex", Model: "gpt-5.6-luna", Effort: "medium"})
+	want := "coder:codex/gpt-5.6-luna/medium"
+	if got != want {
+		t.Errorf("authorLine = %q, want %q", got, want)
+	}
+}
+
+func TestAuthorLineOmitsTrailingSlashWhenEffortUnset(t *testing.T) {
+	got := authorLine(TransitionEvent{Role: "planner", Harness: "claude-code", Model: "sonnet-5"})
+	want := "planner:claude-code/sonnet-5"
+	if got != want {
+		t.Errorf("authorLine = %q, want %q (no trailing slash for unset effort)", got, want)
+	}
+}
+
 func TestFormatTransitionCommentBareTransition(t *testing.T) {
 	got := formatTransitionComment(TransitionEvent{FromStep: "", ToStep: "provision"})
-	want := "**(start) → provision**"
+	want := "conductor\n**(start) → provision**"
 	if got != want {
 		t.Errorf("formatTransitionComment = %q, want %q", got, want)
 	}

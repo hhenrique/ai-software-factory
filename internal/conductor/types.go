@@ -237,6 +237,18 @@ type TransitionEvent struct {
 	// the ToStep == REVIEW_PENDING check is the other half of that rule).
 	AgentStep bool
 
+	// Role/Harness/Model/Effort identify which Worker (or "conductor" for
+	// a tool-owned transition) produced this transition — Role/Harness/
+	// Model/Effort empty means step.Type != agent (a tool step, or a
+	// bookkeeping transition with no step at all: Run start, a human
+	// resume/cancel). Same not-persisted, same-process-only status as
+	// AgentStep above (internal/eventlog only extracts specific named
+	// columns) — purely input to postTrackerComments' author line.
+	Role    string
+	Harness string
+	Model   string
+	Effort  string
+
 	// Produced is the triggering Activity call's Produced fields — nil
 	// for transitions with no Activity call of their own. Persisted
 	// verbatim (see internal/eventlog) so a control-plane surface

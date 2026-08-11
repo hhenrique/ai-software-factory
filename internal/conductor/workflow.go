@@ -165,6 +165,16 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 
 		harness, model, params := roleConfig(in.RoleAssignments, step.Role)
 
+		// authorRole/authorHarness/authorModel/authorEffort feed every
+		// TransitionEvent this step produces below (docs/08's tracker
+		// comment author line) — "" for a tool step, matching
+		// TransitionEvent.Role's own doc comment (empty means
+		// conductor-authored, not a Worker).
+		authorRole, authorHarness, authorModel, authorEffort := "", "", "", ""
+		if step.Type == workflowdef.StepTypeAgent {
+			authorRole, authorHarness, authorModel, authorEffort = step.Role, harness, model, params["effort"]
+		}
+
 		attemptNumber := 1
 		if step.Budget != "" {
 			budgetAttempts[step.Budget]++
@@ -185,6 +195,7 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 				recordT(TransitionEvent{
 					RunID: runID, Workflow: def.Workflow, FromStep: step.ID, ToStep: dest,
 					StepID: step.ID, AttemptNumber: attemptNumber, Outcome: "budget_exhausted",
+					Role: authorRole, Harness: authorHarness, Model: authorModel, Effort: authorEffort,
 				})
 				currentID = dest
 				continue
@@ -203,6 +214,7 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 				recordT(TransitionEvent{
 					RunID: runID, Workflow: def.Workflow, FromStep: step.ID, ToStep: "REVIEW_PENDING",
 					StepID: step.ID, AttemptNumber: attemptNumber, Outcome: "harness_limit_exceeded",
+					Role: authorRole, Harness: authorHarness, Model: authorModel, Effort: authorEffort,
 				})
 				currentID = "REVIEW_PENDING"
 				continue
@@ -256,6 +268,7 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 				RunID: runID, Workflow: def.Workflow, FromStep: step.ID, ToStep: step.OnMalformedOutput,
 				StepID: step.ID, AttemptNumber: attemptNumber, TokenDelta: out.TokensUsed, ActivityCalls: 1,
 				Outcome: "malformed_output", Produced: out.Produced, AgentStep: step.Type == workflowdef.StepTypeAgent,
+				Role: authorRole, Harness: authorHarness, Model: authorModel, Effort: authorEffort,
 			})
 			currentID = step.OnMalformedOutput
 			continue
@@ -269,6 +282,7 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 			RunID: runID, Workflow: def.Workflow, FromStep: step.ID, ToStep: dest,
 			StepID: step.ID, AttemptNumber: attemptNumber, TokenDelta: out.TokensUsed, ActivityCalls: 1,
 			Outcome: out.Outcome, Produced: out.Produced, AgentStep: step.Type == workflowdef.StepTypeAgent,
+			Role: authorRole, Harness: authorHarness, Model: authorModel, Effort: authorEffort,
 		})
 		currentID = dest
 	}

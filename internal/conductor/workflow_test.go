@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -966,6 +967,55 @@ func TestRunWorkflowPostsTrackerCommentOnceRunHasAPRURL(t *testing.T) {
 	require.Equal(t, "github_pr", last.TargetKind)
 	require.Equal(t, "https://github.com/o/r/pull/7", last.TargetRef)
 	require.Contains(t, last.Body, "create_pr")
+}
+
+// TestRunWorkflowTrackerCommentAuthorLine is the end-to-end version of
+// TestAuthorLineWorkerIdentityForAgentTransition/
+// TestAuthorLineConductorForToolOwnedTransition — proves the wiring from
+// RunInput.RoleAssignments through the step loop's authorRole/
+// authorHarness/authorModel/authorEffort locals into a posted comment's
+// actual first line, not just the formatting function in isolation.
+func TestRunWorkflowTrackerCommentAuthorLine(t *testing.T) {
+	env := newTestEnv(t)
+	def := mustParseDependencyBumpMinimal(t)
+
+	env.OnActivity("worktree.create", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{}, nil).Once()
+	env.OnActivity(conductor.HarnessInvokeActivityName, mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{}, nil).Once()
+	env.OnActivity("run.tests_lint_build", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Outcome: "pass"}, nil).Once()
+	env.OnActivity("pr.create_and_link", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{}, nil).Once()
+
+	var comments []conductor.TrackerCommentInput
+	env.OnActivity(conductor.TrackerPostCommentActivityName, mock.Anything, mock.Anything).
+		Return(func(ctx context.Context, in conductor.TrackerCommentInput) error {
+			comments = append(comments, in)
+			return nil
+		})
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{
+		Definition:      def,
+		SourceRef:       conductor.SourceRef{Kind: "github_issue", Ref: "https://github.com/o/r/issues/1"},
+		RoleAssignments: map[string]workflowdef.Role{"coder": {Harness: "codex", Model: "gpt-5.6-luna", Params: map[string]string{"effort": "medium"}}},
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.NotEmpty(t, comments)
+
+	var sawAgentAuthor, sawConductorAuthor bool
+	for _, c := range comments {
+		if strings.HasPrefix(c.Body, "coder:codex/gpt-5.6-luna/medium\n") {
+			sawAgentAuthor = true
+		}
+		if strings.HasPrefix(c.Body, "conductor\n") {
+			sawConductorAuthor = true
+		}
+	}
+	require.True(t, sawAgentAuthor, "expected at least one comment authored by the coder Worker, got: %+v", comments)
+	require.True(t, sawConductorAuthor, "expected at least one comment authored by conductor (COMPLETED is tool-owned), got: %+v", comments)
 }
 
 // TestRunWorkflowPostsTrackerCommentToSourceRefFromTheStart is docs/08's
