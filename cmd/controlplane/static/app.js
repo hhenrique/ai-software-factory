@@ -13,11 +13,6 @@ const VIEWS = {
   inbox: { label: "Inbox", render: renderInbox },
   pending_approvals: { label: "Pending approvals", render: renderPendingApprovals },
   settings: { label: "Settings", render: renderSettings },
-  workflow_v1: { label: "Workflow (v1: vanilla SVG)", render: renderWorkflowV1 },
-  workflow_v2: { label: "Workflow (v2: D3 + dagre)", render: renderWorkflowV2 },
-  workflow_v3: { label: "Workflow (v3: Cytoscape.js)", render: renderWorkflowV3 },
-  workflow_v4: { label: "Workflow (v4: BPMN-styled)", render: renderWorkflowV4 },
-  workflow_v5: { label: "Workflow (v5: bpmn-js + auto-layout)", render: renderWorkflowV5 },
 };
 
 const DEFAULT_VIEW = "repositories";
@@ -341,6 +336,46 @@ function showRunDetails(task) {
     });
 }
 
+// showWorkflowGraphModal is the Workflows view's "View Cytoscape"/"View
+// BPMN" row toggles — same modal chrome as showRunDetails (backdrop,
+// Escape/click-outside/close-button dismissal), but wide: a graph needs
+// real canvas space, not a text-sized dialog (docs/06's own framing for
+// why these renderers get a dedicated canvas area at all). kind is
+// "cytoscape" or "bpmn"; info is one /api/workflows entry (its .path is
+// what buildGraphViewShell's fixedPath renders).
+function showWorkflowGraphModal(kind, info) {
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  const dialog = document.createElement("section");
+  dialog.className = "modal-dialog modal-dialog-wide";
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-labelledby", "workflow-graph-title");
+  const kindLabel = kind === "bpmn" ? "BPMN diagram" : "Cytoscape graph";
+  dialog.innerHTML = `
+    <div class="modal-kicker">${kindLabel.toUpperCase()}</div>
+    <div class="modal-header">
+      <div><h2 id="workflow-graph-title">${info.workflow || info.path}</h2><p class="modal-subtitle">${info.path}</p></div>
+      <button class="icon-button modal-close" aria-label="Close ${kindLabel}">×</button>
+    </div>
+    <div class="modal-content"></div>
+  `;
+  backdrop.appendChild(dialog);
+  document.body.appendChild(backdrop);
+  const close = () => backdrop.remove();
+  dialog.querySelector(".modal-close").addEventListener("click", close);
+  backdrop.addEventListener("click", (event) => { if (event.target === backdrop) close(); });
+  const onKey = (event) => { if (event.key === "Escape") { close(); document.removeEventListener("keydown", onKey); } };
+  document.addEventListener("keydown", onKey);
+
+  const content = dialog.querySelector(".modal-content");
+  if (kind === "bpmn") {
+    renderWorkflowV4(content, info.path);
+  } else {
+    renderWorkflowV3(content, info.path);
+  }
+}
+
 // populateWorkflowSelect fills a <select> from /api/workflows'
 // WorkflowInfo objects — shared by the Repositories view (add form +
 // per-row edit) and the Work view (task create form).
@@ -560,23 +595,30 @@ function tokenizeYamlScalar(value) {
   return [{ text: value }];
 }
 
-// ---- shared graph-view scaffold (workflow_v1/v2/v3) ----
+// ---- shared graph-view scaffold (Cytoscape/BPMN, opened from Workflows) ----
 
-// buildGraphViewShell is the common chrome every visualization prototype
-// shares: an error banner, a workflow picker, a canvas area sized for a
-// real graph (not a chat-bubble-sized card), and a legend row. Each
-// prototype supplies its own render(canvasEl, graph) — everything about
-// *how* the graph is drawn and panned/zoomed is prototype-specific by
-// design (that's the point of having three), but the surrounding page
-// structure shouldn't be reinvented three times.
-// buildGraphViewShell is the common chrome every visualization prototype
-// shares. opts.layouts is a list of {id, label, render(canvas, graph)} —
-// each prototype registers several layout algorithms rather than one, so
-// they can be compared live via the second dropdown without leaving the
-// page. The graph itself (including cluster membership — see
-// cmd/controlplane's computeClusters) is fetched once per workflow
-// selection and reused across every layout switch; only re-rendering is
-// re-run, not a new API call.
+// buildGraphViewShell is the common chrome both graph visualizations
+// (Cytoscape, BPMN-styled — see the Workflows view's "View
+// Cytoscape"/"View BPMN" row toggles) share: an error banner, a canvas
+// area sized for a real graph (not a chat-bubble-sized card), and a
+// legend row. Each caller supplies its own render(canvasEl, graph) —
+// everything about *how* the graph is drawn and panned/zoomed is
+// renderer-specific by design, but the surrounding chrome shouldn't be
+// reinvented twice.
+//
+// opts.layouts is a list of {id, label, render(canvas, graph)} — a
+// renderer can register several layout algorithms rather than one, so
+// they're comparable live via the layout dropdown without leaving the
+// view. The graph itself (including cluster membership — see
+// cmd/controlplane's computeClusters) is fetched once and reused across
+// every layout switch; only re-rendering is re-run, not a new API call.
+//
+// opts.fixedPath renders exactly one Workflow Definition (the Workflows
+// view already knows which row's toggle was clicked) — no workflow
+// picker at all, unlike the standalone-page shape this shell used to
+// only have (back when workflow_v1/v2/v5 each had their own always-
+// pick-a-workflow nav item; see docs/06's decision to prune those and
+// access v3/v4 from the Workflows view instead).
 function buildGraphViewShell(container, opts) {
   const wrap = document.createElement("div");
 
@@ -598,7 +640,7 @@ function buildGraphViewShell(container, opts) {
   card.innerHTML = `
     <div class="card-header">
       <h2>${opts.title}</h2>
-      <select class="graph-workflow-select"><option value="">(loading...)</option></select>
+      ${opts.fixedPath ? "" : '<select class="graph-workflow-select"><option value="">(loading...)</option></select>'}
       <select class="graph-layout-select">${layoutOptionsHTML}</select>
     </div>
     <div class="graph-canvas-wrap"><div class="graph-canvas"></div></div>
@@ -619,25 +661,29 @@ function buildGraphViewShell(container, opts) {
 
   let currentGraph = null;
 
-  apiRequest("/api/workflows")
-    .then((infos) => {
-      infos = infos || [];
-      workflowSelect.innerHTML = "";
-      for (const info of infos) {
-        const option = document.createElement("option");
-        option.value = info.path;
-        option.textContent = info.path;
-        workflowSelect.appendChild(option);
-      }
-      if (infos.length > 0) {
-        loadGraph(infos[0].path);
-      } else {
-        showError(new Error("No workflow definitions found."));
-      }
-    })
-    .catch(showError);
+  if (opts.fixedPath) {
+    loadGraph(opts.fixedPath);
+  } else {
+    apiRequest("/api/workflows")
+      .then((infos) => {
+        infos = infos || [];
+        workflowSelect.innerHTML = "";
+        for (const info of infos) {
+          const option = document.createElement("option");
+          option.value = info.path;
+          option.textContent = info.path;
+          workflowSelect.appendChild(option);
+        }
+        if (infos.length > 0) {
+          loadGraph(infos[0].path);
+        } else {
+          showError(new Error("No workflow definitions found."));
+        }
+      })
+      .catch(showError);
+    workflowSelect.addEventListener("change", () => loadGraph(workflowSelect.value));
+  }
 
-  workflowSelect.addEventListener("change", () => loadGraph(workflowSelect.value));
   layoutSelect.addEventListener("change", renderCurrentLayout);
 
   function loadGraph(path) {
@@ -1095,6 +1141,18 @@ function renderWorkflows(container) {
     sourceToggle.className = "link";
     sourceToggle.textContent = "View YAML";
     actions.appendChild(sourceToggle);
+
+    const cytoscapeToggle = document.createElement("button");
+    cytoscapeToggle.className = "link";
+    cytoscapeToggle.textContent = "View Cytoscape";
+    cytoscapeToggle.addEventListener("click", () => showWorkflowGraphModal("cytoscape", info));
+    actions.appendChild(cytoscapeToggle);
+
+    const bpmnToggle = document.createElement("button");
+    bpmnToggle.className = "link";
+    bpmnToggle.textContent = "View BPMN";
+    bpmnToggle.addEventListener("click", () => showWorkflowGraphModal("bpmn", info));
+    actions.appendChild(bpmnToggle);
 
     const badge = document.createElement("span");
     badge.className = "badge " + (info.valid ? "valid" : "invalid");

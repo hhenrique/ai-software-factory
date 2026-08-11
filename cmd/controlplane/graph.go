@@ -1,8 +1,9 @@
-// Graph-building for the workflow_v1/v2/v3 visualization prototypes:
-// turning a parsed Workflow Definition into a renderable node/edge graph,
-// plus cluster detection (which nodes form a real back/forth loop) so
-// every layout algorithm can use the same real data instead of each
-// prototype re-deriving it in JS three different ways.
+// Graph-building for the Workflows view's "View Cytoscape"/"View BPMN"
+// row toggles (docs/06's design spike; v1/v2/v5 pruned, v3/v4 kept —
+// see that doc's Decision section): turning a parsed Workflow Definition
+// into a renderable node/edge graph, plus cluster detection (which nodes
+// form a real back/forth loop) so both renderers use the same real data
+// instead of each re-deriving it in JS.
 package main
 
 import (
@@ -15,9 +16,9 @@ import (
 )
 
 // WorkflowGraph is the full step graph behind a Workflow Definition —
-// what the workflow_v1/v2/v3 visualization prototypes render. Separate
-// from WorkflowInfo (which is a summary for the Workflows list): a graph
-// view needs every step and every edge, not just counts.
+// what the Workflows view's graph toggles render. Separate from
+// WorkflowInfo (which is a summary for the Workflows list): a graph view
+// needs every step and every edge, not just counts.
 type WorkflowGraph struct {
 	Workflow string      `json:"workflow"`
 	Path     string      `json:"path"`

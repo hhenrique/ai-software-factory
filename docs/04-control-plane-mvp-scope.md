@@ -337,7 +337,7 @@ This same endpoint backs the Repositories form's "Default workflow"
 combobox (added in that slice, before this one existed) — one scan, two
 consumers.
 
-#### Graph visualization prototypes, not a decision yet
+#### Graph visualizations: decided
 
 `GET /api/workflow-graph?path=` serves one Workflow Definition's full
 node/edge graph (every step, every `on:`/`next:`/`on_malformed_output`
@@ -350,52 +350,46 @@ doesn't). Deliberately doesn't require `workflowdef.Validate` to pass
 first — seeing the actual structure, including a broken one, is exactly
 when a human most wants to look at it.
 
-Three prototypes (`workflow_v1`/`v2`/`v3` nav entries) each expose
-several layout algorithms against that same data (a second dropdown
-alongside the workflow picker) — eleven layout runs total, screenshotted
-and ranked in [this
-report](https://claude.ai/code/artifact/152c78a5-2eec-4578-979a-2b97c8dc32a4).
-Short version: plain layered/Sugiyama layout (dagre — every prototype's
-original baseline) ranks a node by longest path from the entry step,
-which scatters a loop's members across separate ranks instead of
-grouping them. Three different fixes were tried:
+Five prototypes were compared as standalone nav entries during the
+spike (`workflow_v1`–`v5`); two were kept, folded into the Workflows
+view as row-level "View Cytoscape"/"View BPMN" toggles (opened in a
+modal, not a separate page) rather than lingering as dead nav entries
+once a direction was picked:
 
-- **v1** (zero dependencies): a hand-rolled "clustered layered" layout
-  (condense each cluster into one rank slot, expand at render time) and
-  a hand-rolled force-directed layout, alongside the original BFS-ranked
-  baseline.
-- **v2** (D3): dagre in both directions, a `d3-force` layout with a
-  ~15-line custom clustering force, and ELK (`elkjs`) — the one engine
-  here with real hierarchical/compound-node support, so a cluster is an
-  actual nested container the top-level layout places as one block.
-- **v3** (Cytoscape.js): dagre, built-in `cose`, `cose-bilkent` flat,
-  and `cose-bilkent` with clusters as real Cytoscape compound (parent)
-  nodes.
-
-**Verdict, not yet acted on**: compound/hierarchical containment (ELK's
-nested nodes; Cytoscape's compound parent nodes) is the only approach
-where a cluster's boundary is structurally enforced by the layout engine
-rather than inferred afterward as a bounding box around wherever members
-landed — the bounding-box approach (v1's clustered layout, v2's
-`d3-force`) works for this graph but can visually mis-include an
-unrelated nearby node in a denser one (observed directly: v1's
-force-directed layout's hull catches `REVIEW_PENDING` inside it, which
-isn't a cluster member). Cytoscape + `cose-bilkent` (compound) is the
-lead candidate — least code, real containment, pan/zoom/drag all built
-in; ELK (v2) is the fallback if left-to-right procedural reading order
-matters more than its 1.6MB footprint for a given use.
+- **Layout-algorithm research (v1/v2/v3), winner: v3/Cytoscape.js.**
+  Plain layered/Sugiyama layout (dagre — every prototype's original
+  baseline) ranks a node by longest path from the entry step, which
+  scatters a loop's members across separate ranks instead of grouping
+  them. Eleven layout runs total across three fix approaches,
+  screenshotted and ranked in [this
+  report](https://claude.ai/code/artifact/152c78a5-2eec-4578-979a-2b97c8dc32a4):
+  compound/hierarchical containment (ELK's nested nodes; Cytoscape's
+  compound parent nodes) was the only approach where a cluster's
+  boundary is structurally enforced by the layout engine rather than
+  inferred afterward as a bounding box around wherever members landed —
+  the bounding-box approach (v1's clustered layout, v2's `d3-force`)
+  worked for this graph but could visually mis-include an unrelated
+  nearby node in a denser one (observed directly: v1's force-directed
+  layout's hull caught `REVIEW_PENDING` inside it, which isn't a cluster
+  member). **Cytoscape + `cose-bilkent` (compound) won**: least code,
+  real containment, pan/zoom/drag all built in. v1 and v2 (and ELK,
+  v2's fallback candidate) were dropped with them.
+- **BPMN-as-notation research (v4/v5), winner: v4, hand-rolled.** See
+  06-workflow-visualizations.md for the full comparison. Short version:
+  v4 (hand-rolled BPMN-styled SVG) and v5 (the real `bpmn-auto-layout` +
+  `bpmn-js` toolchain) hit the *same* unresolved problem — several
+  distinct edges converging on one node (most visibly around
+  `REVIEW_PENDING`) become untraceable by eye in both. Since the real
+  toolchain has that problem too, it reads as a property of this
+  Workflow Definition's shape, not a fixable gap in the hand-rolled
+  renderer specifically. v5 additionally had real toolchain gaps found
+  live (lanes silently dropped by `bpmn-auto-layout`, a mandatory
+  bpmn.io watermark, heavier vendoring) with no offsetting benefit over
+  v4 on the actual open problem, so v4 — simpler, same real limitation,
+  no extra baggage — was kept and v5 dropped.
 
 Libraries are vendored under `cmd/controlplane/static/vendor/` (see that
-directory's `README.md`), not CDN-loaded. **Still not decided** — this
-doc will be updated once a direction is picked, at which point every
-other layout option should come back out rather than linger as dead
-nav entries.
-
-Two more prototypes (`workflow_v4`: hand-rolled BPMN-styled; `workflow_v5`:
-real `bpmn-auto-layout` + `bpmn-js` toolchain) explored BPMN as a notation
-rather than a further node-link layout — see
-06-workflow-visualizations.md for that spike's full findings and current
-paused status.
+directory's `README.md`, including what was pruned and why).
 
 ### Workers
 

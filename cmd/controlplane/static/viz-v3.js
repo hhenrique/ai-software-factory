@@ -22,9 +22,13 @@
 //     Member nodes are literally contained within their cluster's box
 //     the layout draws, not just visually near each other.
 
-function renderWorkflowV3(container) {
+// path, when given, renders exactly that Workflow Definition with no
+// picker — the Workflows view's "View Cytoscape" row toggle already
+// knows which one.
+function renderWorkflowV3(container, path) {
   buildGraphViewShell(container, {
-    title: "workflow_v3 — Cytoscape.js",
+    title: "Cytoscape.js graph",
+    fixedPath: path,
     interactionHint: "drag to pan, scroll to zoom, drag a node to move it — all built in",
     layouts: [
       { id: "dagre", label: "Dagre", render: (canvas, graph) => vizV3Render(canvas, graph, vizV3DagreLayoutOptions(), false) },

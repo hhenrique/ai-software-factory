@@ -43,14 +43,38 @@
 //                        models — it is not a true terminal (a Run can
 //                        resume from it), unlike the other three.
 //
-// Column position reuses v1's vizV1ComputeLayers (longest-path-from-entry
-// BFS ranks) purely for left-to-right order; the cross-axis (lane) comes
+// Column position uses vizV4ComputeLayers (longest-path-from-entry BFS
+// ranks) purely for left-to-right order; the cross-axis (lane) comes
 // from Role/ownership, never from the layering algorithm.
 
 const VIZ_V4_TASK_WIDTH = 170;
 const VIZ_V4_TASK_HEIGHT = 52;
 const VIZ_V4_COLUMN_WIDTH = 210;
 const VIZ_V4_GATEWAY_SIZE = 34;
+
+// vizV4ComputeLayers assigns each node a rank (its longest path from
+// entry, via BFS relaxation) — the same layering primitive the pruned
+// vizV1 hand-rolled-layout prototype used, kept here since v4 is its
+// only remaining consumer.
+function vizV4ComputeLayers(nodeIds, adj, entryId) {
+  const layer = { [entryId]: 0 };
+  const visited = new Set([entryId]);
+  const queue = [entryId];
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    for (const next of adj[cur] || []) {
+      layer[next] = Math.max(layer[next] ?? 0, layer[cur] + 1);
+      if (!visited.has(next)) {
+        visited.add(next);
+        queue.push(next);
+      }
+    }
+  }
+  for (const id of nodeIds) {
+    if (!(id in layer)) layer[id] = 0;
+  }
+  return layer;
+}
 const VIZ_V4_GATEWAY_GAP = 60;
 const VIZ_V4_EVENT_DIAMETER = 44;
 const VIZ_V4_BOUNDARY_DIAMETER = 18;
@@ -58,9 +82,13 @@ const VIZ_V4_LANE_HEIGHT = 130;
 const VIZ_V4_LANE_LABEL_WIDTH = 130;
 const VIZ_V4_MARGIN = 60;
 
-function renderWorkflowV4(container) {
+// path, when given, renders exactly that Workflow Definition with no
+// picker — the Workflows view's "View BPMN" row toggle already knows
+// which one.
+function renderWorkflowV4(container, path) {
   buildGraphViewShell(container, {
-    title: "workflow_v4 — BPMN-styled",
+    title: "BPMN-styled diagram",
+    fixedPath: path,
     interactionHint:
       "drag to pan, scroll to zoom — lanes are Role, diamonds are on: outcomes, " +
       "dashed circles are on_malformed_output escape hatches, dashed boxes are loop sub-processes",
@@ -112,7 +140,7 @@ function vizV4Layout(graph) {
   for (const n of graph.nodes) adj[n.id] = [];
   for (const e of graph.edges) (adj[e.from] = adj[e.from] || []).push(e.to);
   const entry = graph.nodes.find((n) => n.kind !== "terminal") || graph.nodes[0];
-  const layer = vizV1ComputeLayers(graph.nodes.map((n) => n.id), adj, entry.id);
+  const layer = vizV4ComputeLayers(graph.nodes.map((n) => n.id), adj, entry.id);
 
   // A real branch point is a node with 2+ outcome-labeled (`on:`) edges.
   // on_malformed_output never counts here — it becomes a boundary event

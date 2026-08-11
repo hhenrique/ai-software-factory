@@ -619,6 +619,13 @@ button.link:hover {
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
 }
 
+/* .modal-dialog-wide: the graph modals (View Cytoscape/BPMN) need real
+   canvas space, not a text-sized dialog — same reasoning
+   .graph-canvas-wrap's own fixed height already applies. */
+.modal-dialog-wide {
+  width: min(1200px, 96vw);
+}
+
 .modal-kicker {
   color: var(--color-accent);
   font-size: 0.7rem;
@@ -736,7 +743,7 @@ button.link:hover {
 .plan-diff-remove { color: var(--color-negative); }
 .plan-diff-same { color: var(--color-text-muted); }
 
-/* ---- workflow graph visualizations (workflow_v1/v2/v3) ---- */
+/* ---- workflow graph visualizations (Cytoscape/BPMN, opened from Workflows) ---- */
 
 :root {
   --color-node-tool: #3a7bd5;
@@ -799,40 +806,6 @@ button.link:hover {
   height: 100%;
 }
 
-.graph-node rect, .graph-node .graph-node-shape {
-  stroke-width: 1.5;
-  fill: var(--color-surface-raised);
-  stroke: var(--color-border);
-}
-
-.graph-node.kind-tool .graph-node-shape { stroke: var(--color-node-tool); }
-.graph-node.kind-agent .graph-node-shape { stroke: var(--color-node-agent); }
-.graph-node.kind-terminal .graph-node-shape { stroke: var(--color-node-terminal); fill: var(--color-bg); }
-
-.graph-node text {
-  fill: var(--color-text);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  pointer-events: none;
-}
-
-.graph-node .graph-node-sub {
-  fill: var(--color-text-muted);
-  font-size: 10px;
-}
-
-.graph-edge-path {
-  fill: none;
-  stroke: var(--color-edge);
-  stroke-width: 1.5;
-}
-
-.graph-edge-label {
-  fill: var(--color-edge-label);
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-
 .graph-legend {
   display: flex;
   gap: var(--space-4);
@@ -857,17 +830,8 @@ button.link:hover {
   border: 1.5px solid currentColor;
 }
 
-.graph-cluster-hull {
-  fill: var(--color-cluster-fill);
-  stroke: var(--color-cluster-ring);
-  stroke-width: 1.5;
-  stroke-dasharray: 4 3;
-}
-
 /* Cytoscape.js compound (parent/cluster) node styling — v3's compound
-   layout draws the cluster container as a real node, not an SVG overlay
-   like v1/v2's hull path, so it needs its own selector rather than
-   .graph-cluster-hull. */
+   layout draws the cluster container as a real node. */
 .cy-cluster-parent {
   background-opacity: 0.06;
 }

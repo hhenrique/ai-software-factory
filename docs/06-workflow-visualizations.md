@@ -1,10 +1,12 @@
 # Workflow Definition Visualizations — Spike Notes
 
-Status: exploratory — spike paused, not decided
+Status: decided — v3 (Cytoscape.js) and v4 (hand-rolled BPMN-styled)
+kept, accessible from the Workflows view's "View Cytoscape"/"View BPMN"
+row toggles; v1, v2, and v5 dropped
 Depends on: 01-run-state-machine.md (the states/transitions being drawn),
 02-workflow-definition-schema.md (the YAML being drawn), 04-control-plane-mvp-scope.md
-(where these prototypes live in the control plane)
-Consumed by: none yet — a future decision doc, once one approach is picked
+(where these renderers live in the control plane)
+Consumed by: 04-control-plane-mvp-scope.md's "Graph visualizations" section
 
 ## Scope
 
@@ -174,10 +176,33 @@ the parts of the diagram v4 also renders cleanly.
 
 ## Decision
 
-Spike paused, not resumed yet. No prototype removed — `workflow_v1`
-through `workflow_v5` all stay in the nav for now rather than being
-pruned to a single winner, since no winner was established. Revisit after
-further research into BPMN (specifically: whether standard BPMN practice
-has an established pattern for a node with many distinct incoming
-exception/escalation routes, since that's the exact shape both
-renderers struggled with here).
+Both open questions this spike raised are now resolved and acted on —
+`workflow_v1` through `workflow_v5`'s standalone nav entries are gone;
+v3 and v4 are kept, accessible from the Workflows view's "View
+Cytoscape"/"View BPMN" row toggles instead (opened in a modal, not a
+separate page).
+
+**Layout-algorithm research (v1/v2/v3): v3/Cytoscape.js wins**, per the
+"Verdict" this doc's earlier section already reached and never revisited
+— Cytoscape + `cose-bilkent` (compound) gives structurally-enforced
+cluster containment with the least code, pan/zoom/drag built in. v1 and
+v2 (and ELK, v2's own fallback candidate) are dropped.
+
+**BPMN-as-notation research (v4/v5): v4/hand-rolled wins.** Revisiting
+the open question above (does standard BPMN practice have an
+established pattern for a node with many distinct incoming exception/
+escalation routes) wasn't necessary to decide this — the real toolchain
+in v5 hits the identical convergence problem v4 does at the identical
+location in the graph, so adopting it wouldn't have resolved the thing
+that would have justified adopting it. Given that, v5's own added costs
+tip the decision: real gaps found live (lanes silently dropped by
+`bpmn-auto-layout`, a mandatory bpmn.io watermark, heavier vendoring —
+an ESM-only package hand-bundled with `esbuild` rather than a drop-in
+script tag) with no offsetting benefit over v4 on the actual open
+problem. v4 — simpler, same real limitation, no extra baggage — is kept;
+v5 is dropped. The convergence-routing problem itself is unresolved by
+either approach and stays that way; it reads as a property of a
+Workflow Definition with this shape (several structurally distinct
+routes converging on one node) rather than a gap either renderer can
+fix alone. Worth reopening only alongside real BPMN-notation research
+(the original open question above), not as a rendering-engine swap.

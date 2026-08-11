@@ -1,63 +1,52 @@
 # Vendored libraries
 
-Used only by the workflow_v2/workflow_v3 visualization prototypes
-(workflow_v1 is dependency-free vanilla SVG). Downloaded once and
-committed rather than loaded from a CDN — this is a self-hosted app, and
-a CSP/offline-friendly static asset beats a runtime fetch to a third
-party for a handful of files this small.
+Used by the Workflows view's "View Cytoscape" (`viz-v3.js`) and "View
+BPMN" (`viz-v4.js`, hand-rolled — d3 only, no BPMN toolchain) row
+toggles. Downloaded once and committed rather than loaded from a CDN —
+this is a self-hosted app, and a CSP/offline-friendly static asset beats
+a runtime fetch to a third party for a handful of files this small.
 
 | File                      | Package                                            | Version |
 |---------------------------|-----------------------------------------------------|---------|
 | `d3.v7.min.js`             | https://unpkg.com/d3@7/dist/d3.min.js               | 7.x     |
 | `dagre.v1.min.js`          | https://unpkg.com/@dagrejs/dagre@1/dist/dagre.min.js | 1.x     |
-| `elk.v0.9.bundled.js`      | https://unpkg.com/elkjs@0.9/lib/elk.bundled.js      | 0.9.x   |
 | `cytoscape.v3.min.js`      | https://unpkg.com/cytoscape@3/dist/cytoscape.min.js | 3.x     |
 | `cytoscape-dagre.v2.js`    | https://unpkg.com/cytoscape-dagre@2/cytoscape-dagre.js | 2.x  |
 | `layout-base.v2.js`        | https://unpkg.com/layout-base@2/layout-base.js      | 2.x     |
 | `cose-base.v2.js`          | https://unpkg.com/cose-base@2/cose-base.js          | 2.x     |
 | `cytoscape-cose-bilkent.v4.js` | https://unpkg.com/cytoscape-cose-bilkent@4/cytoscape-cose-bilkent.js | 4.x |
 
-Load order matters for the cose-bilkent chain — each expects the previous
-as an un-bundled peer dependency exposed as a plain global, same
-relationship `dagre.v1.min.js` has to `cytoscape-dagre.v2.js`:
-`layout-base` (`window.layoutBase`) → `cose-base` (`window.coseBase`,
-itself needs `layoutBase`) → `cytoscape-cose-bilkent` (needs `coseBase`).
-
-`elk.v0.9.bundled.js` (the Eclipse Layout Kernel, via elkjs) is the
-heaviest single file here (~1.6MB) — vendored anyway because it's the one
-library in this set with real hierarchical/compound-node support, used by
-workflow_v2's "ELK layered (hierarchical)" option to cluster a Workflow
-Definition's back/forth loops properly rather than approximating it
-(dagre has no compound-node concept at all).
+`dagre.v1.min.js` is a peer dependency, not loaded directly by any of our
+own code — `cytoscape-dagre.v2.js` (v3's "Dagre" layout option) expects
+the plain `dagre` global it exposes to already exist, same relationship
+the cose-bilkent chain below has. Load order matters for that chain too
+— each expects the previous as an un-bundled peer dependency exposed as
+a plain global: `layout-base` (`window.layoutBase`) → `cose-base`
+(`window.coseBase`, itself needs `layoutBase`) → `cytoscape-cose-bilkent`
+(needs `coseBase`).
 
 To upgrade: re-download from the same unpkg URL with a newer major
-version pinned, verify the visualization pages still render, update the
-version in the filename and this table.
+version pinned, verify the Workflows view's graph toggles still render,
+update the version in the filename and this table.
 
-## bpmn-js / bpmn-auto-layout (workflow_v5)
+## Pruned: ELK, bpmn-js, bpmn-auto-layout
 
-Used only by the workflow_v5 prototype — a real-toolchain comparison
-against workflow_v4's hand-rolled BPMN-styled renderer, requested directly
-to answer "how much are we losing by not adopting the actual BPMN
-toolchain." Unlike everything above, `bpmn-auto-layout` doesn't ship a
-pre-built browser bundle (it's ESM-only and imports `bpmn-moddle` /
-`min-dash` as bare specifiers, which a plain `<script>` tag can't resolve
-without an import map or bundler) — its file here was built locally rather
-than downloaded as-is.
+`docs/06-workflow-visualizations.md`'s design-spike compared five
+visualization prototypes (`workflow_v1`–`v5`, each its own standalone nav
+item). Decision: keep only Cytoscape (v3, the layout-algorithm research's
+lead candidate) and the hand-rolled BPMN-styled renderer (v4) — both
+folded into the Workflows view as row-level toggles rather than separate
+nav items — and drop v1/v2 (superseded by v3 in that same comparison)
+and v5 (a real BPMN toolchain that hit the *same* unresolved edge-
+convergence problem v4 has, plus its own toolchain gaps — lanes silently
+dropped by `bpmn-auto-layout`, a mandatory watermark, heavier vendoring —
+with no offsetting benefit over v4 on the actual open problem). See that
+doc's Decision section for the full reasoning.
 
-| File | Source | Version |
-|---|---|---|
-| `bpmn-js.v18.navigated-viewer.min.js` | https://unpkg.com/bpmn-js@18.22.1/dist/bpmn-navigated-viewer.production.min.js (pre-packaged UMD, `window.BpmnJS`) | 18.22.1 |
-| `bpmn-js.v18.css` | `bpmn-js`'s own `dist/assets/bpmn-js.css` | 18.22.1 |
-| `diagram-js.v18.css` | `bpmn-js`'s own `dist/assets/diagram-js.css` | 18.22.1 |
-| `bpmn-embedded-font.v18.css` | `bpmn-js`'s own `dist/assets/bpmn-font/css/bpmn-embedded.css` — the icon font as self-contained base64 `@font-face`, so no separate `.woff`/`.ttf` files need vendoring alongside it | 18.22.1 |
-| `bpmn-auto-layout.v1.bundle.js` | `bpmn-auto-layout@1.3.0`'s `dist/index.js`, bundled locally: `esbuild dist/index.js --bundle --format=iife --global-name=BpmnAutoLayout --platform=browser` (exposes `window.BpmnAutoLayout.layoutProcess`) | 1.3.0 |
-
-**License note (`bpmn-js`, MIT-based but not plain MIT):** the license adds
-one binding condition — the bpmn.io watermark link that `bpmn-js` renders
-into the diagram itself must stay visible and not be covered by other
-elements. Don't add CSS/z-index tricks that hide it.
-
-To rebuild `bpmn-auto-layout.v1.bundle.js` after a version bump: `npm
-install bpmn-auto-layout@<version> esbuild`, then run the `esbuild`
-command above against the installed package's `dist/index.js`.
+Removed with them: `elk.v0.9.bundled.js` (only `workflow_v2` used it —
+`dagre.v1.min.js` stayed despite v2 also using it directly, since v3's
+own "Dagre" layout option needs it as `cytoscape-dagre.v2.js`'s peer
+dependency, above), `bpmn-js.v18.navigated-viewer.min.js` /
+`bpmn-js.v18.css` / `diagram-js.v18.css` / `bpmn-embedded-font.v18.css` /
+`bpmn-auto-layout.v1.bundle.js` (only `workflow_v5` used any of these —
+v4 deliberately never depended on the real BPMN toolchain at all).
