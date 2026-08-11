@@ -1969,7 +1969,7 @@ function renderInbox(container) {
       </div>
       <div class="field">
         <label>Hint (free text, passed to the resumed step's context)</label>
-        <input type="text" class="resume-hint" placeholder="e.g. what changed, or why to proceed">
+        <textarea class="resume-hint" rows="3" placeholder="e.g. what changed, or why to proceed"></textarea>
       </div>
       <div class="resume-advice"></div>
       <label class="confirmation-check"><input type="checkbox" class="resume-confirm"> I reviewed the latest summary and understand this resume will reset the Run's budgets.</label>

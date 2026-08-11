@@ -334,7 +334,8 @@ body {
 }
 
 .field input,
-.field select {
+.field select,
+.field textarea {
   background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
@@ -345,8 +346,14 @@ body {
   width: 100%;
 }
 
+.field textarea {
+  resize: vertical;
+  min-height: 4.5em;
+}
+
 .field input:focus,
-.field select:focus {
+.field select:focus,
+.field textarea:focus {
   outline: none;
   border-color: var(--color-text-muted);
 }
