@@ -480,6 +480,71 @@ func TestRunWorkflowResumeResetsAllBudgetCountersAndMergesHint(t *testing.T) {
 	env.AssertExpectations(t)
 }
 
+// TestRunWorkflowResumeHintIsPersistedOnTheTransitionEvent is a
+// regression guard for docs/01's mandatory plan-approval gate: "the
+// record isn't just 'approved,' it's 'approved, and here's why'" is only
+// true if the hint/justification text actually lands in the persisted
+// TransitionEvent (what a control-plane surface renders Summary from,
+// via FormatEventContent), not just merged into the resumed step's own
+// live runContext and lost once the Run moves on.
+func TestRunWorkflowResumeHintIsPersistedOnTheTransitionEvent(t *testing.T) {
+	env := newTestEnv(t)
+	def := workflowdef.Definition{
+		Workflow: "resume-hint-persisted",
+		Version:  1,
+		Steps: []workflowdef.Step{
+			{
+				ID: "verify", Type: workflowdef.StepTypeTool, Action: "run.tests_lint_build",
+				On: map[string]workflowdef.Target{"pass": {StepOrState: "COMPLETED"}, "fail": {StepOrState: "REVIEW_PENDING"}},
+			},
+		},
+	}
+	require.Empty(t, workflowdef.Validate(&def))
+
+	env.OnActivity("run.tests_lint_build", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Outcome: "fail"}, nil).Once()
+
+	var events []conductor.TransitionEvent
+	env.OnActivity(conductor.RecordEventActivityName, mock.Anything, mock.Anything).
+		Return(func(ctx context.Context, ev conductor.TransitionEvent) error {
+			events = append(events, ev)
+			return nil
+		})
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(conductor.HumanDecisionSignalName, conductor.HumanDecision{
+			Action: "cancel",
+		})
+	}, time.Minute)
+
+	// Resume back to the same step (no budget here, so nothing to
+	// re-fail against) — what matters is only the resume transition's
+	// own recorded Produced content, so cancel right after to keep this
+	// test's shape minimal rather than modeling a full second pass.
+	env.OnActivity("run.tests_lint_build", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{Outcome: "fail"}, nil).Maybe()
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(conductor.HumanDecisionSignalName, conductor.HumanDecision{
+			Action: "resume", ResumeStepID: "verify", Hint: "Approved: looks right, ship it",
+		})
+	}, time.Second)
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{Definition: def})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var sawResumeEvent bool
+	for _, ev := range events {
+		if ev.FromStep == "REVIEW_PENDING" && ev.ToStep == "verify" {
+			sawResumeEvent = true
+			require.Equal(t, "Approved: looks right, ship it", ev.Produced["human_hint"],
+				"the resume transition's own Produced must carry the hint, not just live runContext")
+		}
+	}
+	require.True(t, sawResumeEvent, "expected a REVIEW_PENDING -> verify transition event")
+}
+
 func TestRunWorkflowDispatchesCompoundActionSideEffect(t *testing.T) {
 	env := newTestEnv(t)
 	env.RegisterActivityWithOptions(placeholderActivity, activity.RegisterOptions{

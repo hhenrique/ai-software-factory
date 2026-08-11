@@ -47,8 +47,49 @@ func validateContext(def *Definition, cfg *validationConfig) ValidationErrors {
 	return errs
 }
 
+// reviewPendingState is the one terminal state buildEdges deliberately
+// drops as a sink (correct for validateCycles: a human-mediated pause is
+// exactly what makes an otherwise-unbounded loop legal without a
+// budget:, see docs/01's "Mandatory plan approval") that this function
+// has to model anyway. Doc01: a human resume names *any* step id, not
+// one fixed statically by the graph — so once a Workflow routes through
+// REVIEW_PENDING for its normal, non-exceptional path (the plan-approval
+// gate does, unconditionally), everything downstream of it would
+// otherwise look permanently unproducible to this analysis, even though
+// runContext genuinely does carry everything forward at runtime (it's
+// one flat accumulated map, never reconstructed per edge).
+const reviewPendingState = "REVIEW_PENDING"
+
 func computeAvailability(index map[string]*Step, preds map[string][]string, cfg *validationConfig) map[string]map[string]bool {
-	available := make(map[string]map[string]bool, len(index))
+	// reviewPendingSources: real steps that route to REVIEW_PENDING.
+	// Modeled as a permissive pass-through node — available at every one
+	// of its sources flows into it, and it in turn flows into every real
+	// step, since any of them is a legal resume target. This
+	// over-approximates which fields a specific resume target actually
+	// has (the same kind of coarsening this file's package doc already
+	// accepts for per-branch availability generally), trading precision
+	// for soundness: it never flags a legitimately fine Workflow, at the
+	// cost of not catching a resume into a step whose fields genuinely
+	// were never produced on any path.
+	var reviewPendingSources []string
+	for _, id := range sortedStepIDs(index) {
+		s := index[id]
+		isSource := s.Next == reviewPendingState
+		if !isSource {
+			for _, t := range s.On {
+				if t.Destination() == reviewPendingState {
+					isSource = true
+					break
+				}
+			}
+		}
+		if isSource {
+			reviewPendingSources = append(reviewPendingSources, id)
+		}
+	}
+	hasReviewPending := len(reviewPendingSources) > 0
+
+	available := make(map[string]map[string]bool, len(index)+1)
 	for id := range index {
 		set := make(map[string]bool, len(cfg.alwaysAvailableFields))
 		for _, f := range cfg.alwaysAvailableFields {
@@ -56,17 +97,37 @@ func computeAvailability(index map[string]*Step, preds map[string][]string, cfg 
 		}
 		available[id] = set
 	}
+	if hasReviewPending {
+		available[reviewPendingState] = map[string]bool{}
+	}
 
 	produced := make(map[string][]string, len(index))
 	for id, s := range index {
 		produced[id] = producedFields(s, cfg)
 	}
 
+	nodePreds := make(map[string][]string, len(index)+1)
+	for id := range index {
+		ps := preds[id]
+		if hasReviewPending {
+			ps = append(append([]string{}, ps...), reviewPendingState)
+		}
+		nodePreds[id] = ps
+	}
+	if hasReviewPending {
+		nodePreds[reviewPendingState] = reviewPendingSources
+	}
+
+	nodes := sortedStepIDs(index)
+	if hasReviewPending {
+		nodes = append(nodes, reviewPendingState)
+	}
+
 	changed := true
 	for changed {
 		changed = false
-		for _, id := range sortedStepIDs(index) {
-			for _, p := range preds[id] {
+		for _, id := range nodes {
+			for _, p := range nodePreds[id] {
 				for f := range available[p] {
 					if !available[id][f] {
 						available[id][f] = true

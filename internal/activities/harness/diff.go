@@ -39,6 +39,34 @@ func commitWorktreeChanges(ctx context.Context, worktreePath, stepID string, att
 	return string(diffOut), nil
 }
 
+// enforceReadOnlyWorktree is the deterministic backstop behind a
+// Planner-role call's harness-level read-only flag (doc03: necessary,
+// not sufficient — a harness's own claim of read-only isn't verified at
+// the source). Reports whether the worktree was dirty despite the
+// invocation being told not to touch it; if so, resets it (never lets a
+// stray edit leak into what a later Coder-role call against the same
+// worktree sees) rather than either silently discarding the violation or
+// failing the whole Run over it.
+func enforceReadOnlyWorktree(ctx context.Context, worktreePath string) (violated bool, err error) {
+	statusCmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
+	statusCmd.Dir = worktreePath
+	out, err := statusCmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("git status --porcelain: %w", err)
+	}
+	if len(strings.TrimSpace(string(out))) == 0 {
+		return false, nil
+	}
+
+	if err := runGit(ctx, worktreePath, "checkout", "--", "."); err != nil {
+		return false, err
+	}
+	if err := runGit(ctx, worktreePath, "clean", "-fd"); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func runGit(ctx context.Context, dir string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir

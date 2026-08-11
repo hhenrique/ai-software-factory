@@ -129,9 +129,18 @@ func FormatEventContent(produced map[string]any) string {
 		b.WriteString(s)
 	}
 
-	// Assessment leads (context before the decision it informed — a
-	// Planner's understanding of the task and its plan, read before the
-	// verdict that came out of it).
+	// A human's resume hint/justification leads everything else — it's
+	// context a person gave *before* whatever this transition represents
+	// (a plan approval's "here's why," a request-changes note, an
+	// ordinary Inbox resume hint), not a byproduct of it. See
+	// conductor.RunWorkflow's REVIEW_PENDING resume branch for why this
+	// is persisted at all rather than only merged into live runContext.
+	if hint, _ := produced["human_hint"].(string); hint != "" {
+		writeSection("Human note: " + hint)
+	}
+	// Assessment leads the rest (context before the decision it informed
+	// — a Planner's understanding of the task and its plan, read before
+	// the verdict that came out of it).
 	if assessment, _ := produced["assessment"].(string); assessment != "" {
 		writeSection("Assessment: " + assessment)
 	}

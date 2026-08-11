@@ -53,9 +53,18 @@ be audited against Rule 2.
 before `EXECUTING`/`VERIFYING` avoids paying for work that was never
 going to land (Rule 1).
 
+The Planner has real, read-only access to the Run's worktree — the same
+`worktree_path` context field Coder gets — and drafts an actual plan
+against the real repository, not a guess from the task description
+alone. "Read-only" is enforced, not just requested: see
+03-roles-and-harness-contract.md's harness adapter contract for the
+harness-level flag plus the deterministic post-call verification that
+backs it.
+
 Output schema (structured, not prose):
 ```
 verdict: proceed | reject | escalate
+assessment: string         # what the Planner read, what it's proposing, why
 scope_contract:            # required when verdict = proceed
   acceptance_criteria: [...]
   in_scope_paths: [...]
@@ -63,30 +72,77 @@ scope_contract:            # required when verdict = proceed
 ```
 
 Routing:
-- `proceed` → EXECUTING, with `scope_contract` attached to the Run's
-  immutable context (visible to both Coder and Reviewer for the
-  remainder of the Run)
+- `proceed` → **REVIEW_PENDING**, reason `planning_awaiting_approval` —
+  not straight to EXECUTING. See "Mandatory plan approval" below.
+  Approving resumes at EXECUTING with `scope_contract` attached to the
+  Run's immutable context (visible to both Coder and Reviewer for the
+  remainder of the Run).
 - `reject` → FAILED (infeasible and clear — no human gate needed; this
   is a rejection, not a decision)
-- `escalate` → REVIEW_PENDING (infeasible-or-risky-and-ambiguous — scope
-  bigger than the ticket implies, touches a protected path, multiple
-  valid approaches with real tradeoffs)
+- `escalate` → REVIEW_PENDING, reason `planning_escalate`
+  (infeasible-or-risky-and-ambiguous — scope bigger than the ticket
+  implies, touches a protected path, multiple valid approaches with real
+  tradeoffs). Distinct from a routine `proceed` awaiting approval: this
+  is the Planner itself flagging that it doesn't have a confident plan
+  to submit, not a drafted plan waiting on approve-or-send-back. Kept as
+  a separate, higher-urgency queue from routine approvals — see
+  04-control-plane-mvp-scope.md's Inbox vs. Pending Approvals split.
 
-**PLANNING is single-shot for ambiguity.** It is not retried in the hope
-the agent resolves the ambiguity on a second attempt: if the agent could
-resolve it, it would not have been ambiguous to begin with. Retrying
-does not grant additional resolving capability.
+### Mandatory plan approval
 
-**Malformed output is a distinct failure mode from ambiguity.** If the
-Planner fails to produce valid structured output (bad schema, truncated,
-non-conformant), route to REVIEW_PENDING rather than auto-retrying.
-This is a conservative default: an automatic retry on malformed output
-is itself an unvalidated assumption that retrying fixes it rather than
-reproducing the same failure or masking a real prompt/schema bug.
-Tag the `REVIEW_PENDING` reason as `planning_malformed_output`, distinct
-from `planning_escalate`, so this data is separable for future review
-(this decision may be revisited once there is real failure-rate data —
-do not build a retry policy on a guess).
+Every `proceed` verdict pauses the Run for a human decision, for every
+Workflow Definition — there is no "well-specified task, skip the gate"
+carve-out. This is a deliberate accountability choice, not the same
+conservative-default reasoning behind `escalate`/`reject`: the point is
+that a human is on record for every plan a Coder is about to execute
+against, not only the ambiguous ones.
+
+A human resolves a pending plan with one of:
+- **approve** — resumes at EXECUTING, specifically the step named by the
+  Workflow Definition's `approve_resume` field on the planning step
+  (02-workflow-definition-schema.md) — REVIEW_PENDING itself carries no
+  normal-path destination once it's the routing target of `proceed`, so
+  this is what tells the control plane where "approved" actually
+  resumes. Requires a short non-empty justification, not a bare click —
+  the record isn't just "approved," it's "approved, and here's why."
+- **request changes** — resumes at PLANNING with the note carried as
+  `human_hint`, the same resume mechanism described below — always the
+  planning step's own id, no separate field needed for this direction.
+  Requires a non-empty hint, same as approve requires a justification.
+
+**No round cap on the request-changes loop — unusual for a loop in this
+document, and deliberate.** The circuit-breakers on VERIFYING/REVIEWING
+exist specifically because those loops are unattended: an agent retrying
+against itself with no human watching needs a hard stop before it burns
+the budget passively (Rule 1). Here a human makes every single call and
+is accountable for it, so the human's own attention is the brake, not a
+counter — `plan` deliberately declares no `budget:` block. This is the
+same trust already extended to hint-triggered budget resets elsewhere in
+this document (see "Budget reset on human-resumed Runs" below), just
+without a counter to reset in the first place.
+
+Redrafts are diffed against the immediately preceding draft when shown
+to the human, rather than re-rendering the whole plan from scratch each
+round — Rule 1's "pass deltas, not full context" applied to a human
+reader's attention, the same principle `REVISING` already applies to the
+agent side of the verify loop.
+
+This is not the "interactive drop-in" idea sketched at the bottom of
+this document (an open chat session with the Planner) — approve/request-
+changes with a note, resumed through the same signal-based mechanism
+every other REVIEW_PENDING resume uses, deliberately stays a structured,
+turn-based exchange, not a chat surface.
+
+**PLANNING remains single-shot for *automatic* retry.** Nothing above
+changes that: a human resuming with real, specific feedback is
+categorically different from the agent auto-retrying against the same
+ambiguity it already failed to resolve once — that's still never done.
+
+**Malformed output remains a distinct failure mode from either
+escalation or a drafted plan.** If the Planner fails to produce valid
+structured output (bad schema, truncated, non-conformant), route to
+REVIEW_PENDING, reason `planning_malformed_output`, not auto-retried —
+unchanged from before this section was added.
 
 ## EXECUTING ↔ VERIFYING (verify loop)
 
@@ -306,6 +362,12 @@ a Run parked at `REVIEW_PENDING` with one of two decisions:
   Guessing the target automatically risks resuming into the wrong part of
   the loop; naming it explicitly is simpler and doesn't need the state
   machine to infer which escalation implies which resume point.
+
+  The one exception to "hint is optional": resuming a `reason:
+  planning_awaiting_approval` Run requires a non-empty hint in both
+  directions (approve's justification, request-changes' feedback) — see
+  "Mandatory plan approval" above for why a bare click doesn't satisfy
+  this gate's purpose.
 - **cancel** — terminates the Run as `CANCELLED`.
 
 ## Budget reset on human-resumed Runs

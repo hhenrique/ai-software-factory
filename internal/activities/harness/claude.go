@@ -26,13 +26,23 @@ type claudeJSONResult struct {
 }
 
 func (claudeAdapter) invoke(ctx context.Context, inv invocation) (invocationResult, error) {
+	// Activities run headless, with no interactive terminal to approve
+	// tool use from. bypassPermissions is what makes non-interactive file
+	// edits/commands possible at all — used for every role except a
+	// read-only invocation (Planner, doc03), which gets Claude Code's own
+	// "plan" mode instead: not just a prompt request, it actually
+	// disables Write/Edit/side-effecting Bash at the tool level. Still
+	// backed by harness.Invoke's post-call git-status check, not trusted
+	// alone (doc03: a harness's own read-only mode is necessary, not
+	// sufficient).
+	permissionMode := "bypassPermissions"
+	if inv.ReadOnly {
+		permissionMode = "plan"
+	}
 	args := []string{
 		"-p", inv.Prompt,
 		"--output-format", "json",
-		// Activities run headless, with no interactive terminal to approve
-		// tool use from — bypassPermissions is what makes non-interactive
-		// file edits/commands possible at all.
-		"--permission-mode", "bypassPermissions",
+		"--permission-mode", permissionMode,
 	}
 	if inv.Model != "" {
 		args = append(args, "--model", inv.Model)

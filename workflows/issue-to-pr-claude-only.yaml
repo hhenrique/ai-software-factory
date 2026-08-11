@@ -28,10 +28,11 @@ steps:
   - id: plan
     type: agent
     role: planner
-    context: [task_description]
+    context: [task_description, worktree_path]
     output_schema: { verdict: [proceed, reject, escalate], scope_contract: object, assessment: string }
+    approve_resume: execute   # where an approved plan resumes (docs/01's mandatory plan-approval gate)
     on:
-      proceed:  execute
+      proceed:  REVIEW_PENDING
       reject:   FAILED
       escalate: REVIEW_PENDING
     on_malformed_output: REVIEW_PENDING

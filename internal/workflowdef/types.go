@@ -94,4 +94,15 @@ type Step struct {
 	Next              string            `yaml:"next,omitempty"`
 	On                map[string]Target `yaml:"on,omitempty"`
 	OnMalformedOutput string            `yaml:"on_malformed_output,omitempty"`
+
+	// ApproveResume names the step a human's approval resumes at — needed
+	// because a step whose `on:` routes an outcome to REVIEW_PENDING (the
+	// mandatory plan-approval gate, docs/01) no longer has a normal-path
+	// destination declared anywhere else in the graph to fall back on.
+	// Distinct from a request-changes resume, which always goes back to
+	// the step itself (its own id) — only the approve direction needs
+	// this. Meaningless on a step that doesn't route to REVIEW_PENDING;
+	// unvalidated beyond "resolves to a real step id" the same as any
+	// other target, since only Planner-shaped steps use it today.
+	ApproveResume string `yaml:"approve_resume,omitempty"`
 }

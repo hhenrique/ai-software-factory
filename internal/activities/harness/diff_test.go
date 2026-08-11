@@ -82,3 +82,72 @@ func TestCommitWorktreeChangesNoChangesReturnsEmpty(t *testing.T) {
 		t.Errorf("diff = %q, want empty when nothing changed", diff)
 	}
 }
+
+// TestEnforceReadOnlyWorktreeCleanTreeNoViolation is the common case: a
+// Planner-role harness that actually stayed read-only.
+func TestEnforceReadOnlyWorktreeCleanTreeNoViolation(t *testing.T) {
+	requireGit(t)
+	dir := newFixtureWorktree(t)
+
+	violated, err := enforceReadOnlyWorktree(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("enforceReadOnlyWorktree: %v", err)
+	}
+	if violated {
+		t.Errorf("violated = true, want false for a clean tree")
+	}
+}
+
+// TestEnforceReadOnlyWorktreeResetsModifiedTrackedFile is the doc03
+// backstop in action: a harness's read-only flag isn't trusted alone —
+// this is the deterministic check that actually catches and undoes a
+// stray edit to a file already tracked by git.
+func TestEnforceReadOnlyWorktreeResetsModifiedTrackedFile(t *testing.T) {
+	requireGit(t)
+	dir := newFixtureWorktree(t)
+
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("tampered\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+
+	violated, err := enforceReadOnlyWorktree(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("enforceReadOnlyWorktree: %v", err)
+	}
+	if !violated {
+		t.Fatalf("violated = false, want true for a modified tracked file")
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "README.md"))
+	if err != nil {
+		t.Fatalf("read README after reset: %v", err)
+	}
+	if string(got) != "hi\n" {
+		t.Errorf("README.md = %q after reset, want original content restored", got)
+	}
+}
+
+// TestEnforceReadOnlyWorktreeRemovesUntrackedFile proves the reset also
+// catches a brand-new file, not just a modified tracked one — git
+// checkout -- . alone wouldn't remove it, which is why this pairs it
+// with git clean -fd.
+func TestEnforceReadOnlyWorktreeRemovesUntrackedFile(t *testing.T) {
+	requireGit(t)
+	dir := newFixtureWorktree(t)
+
+	newFile := filepath.Join(dir, "NEW.md")
+	if err := os.WriteFile(newFile, []byte("should not exist\n"), 0o644); err != nil {
+		t.Fatalf("write NEW.md: %v", err)
+	}
+
+	violated, err := enforceReadOnlyWorktree(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("enforceReadOnlyWorktree: %v", err)
+	}
+	if !violated {
+		t.Fatalf("violated = false, want true for an untracked new file")
+	}
+	if _, err := os.Stat(newFile); !os.IsNotExist(err) {
+		t.Errorf("NEW.md still exists after reset (stat err = %v), want it removed", err)
+	}
+}

@@ -55,6 +55,27 @@ Run's own Workflow Definition (`GET /api/workflows`' per-file step-id
 list), not free text, for the same typo-prevention reason Repositories'
 default-workflow field is a combobox rather than a text input.
 
+#### Current state: Pending Approvals
+
+Split out from Inbox, not folded into it, because it's a different kind
+of queue: every Task's plan pauses here by design
+(01-run-state-machine.md's mandatory plan-approval gate — reason
+`planning_awaiting_approval`), so this is the routine, expected-volume
+case, while Inbox stays the exceptional one (`planning_escalate`,
+`planning_malformed_output`, budget/harness-limit exhaustion, disputed
+review findings). Mixing them would either bury real escalations in
+routine approval volume or make routine approvals look like problems —
+both undermine the point of Inbox being a short, exceptions-only list.
+
+Two actions, both requiring non-empty free text (see 01's "Mandatory
+plan approval" for why a bare click doesn't satisfy this gate):
+**approve** (resumes at `execute` with a justification) and **request
+changes** (resumes at `plan` with the note as `human_hint`, same
+mechanism as an Inbox resume). A redraft is shown diffed against the
+immediately preceding draft, not the full plan re-rendered — the same
+"don't replay full context" principle applied to what a human has to
+re-read each round.
+
 ### Repositories
 
 Per-repo configuration, minimum required fields:

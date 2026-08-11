@@ -68,6 +68,14 @@ steps:
     on:                         # for steps with conditional routing
       <outcome>: <step id | STATE | { action: ..., next: <step id> }>
     on_malformed_output: <step id | STATE>   # agent steps with output_schema
+    approve_resume: <step id>   # only meaningful on a step whose on: routes an
+                                 # outcome to REVIEW_PENDING as a mandatory
+                                 # approval gate (01's "Mandatory plan approval")
+                                 # — names where an *approval* resumes to, since
+                                 # REVIEW_PENDING itself no longer carries a
+                                 # normal-path destination. A request-changes
+                                 # resume doesn't need this: it always goes back
+                                 # to the step's own id.
 ```
 
 Terminal targets (`FAILED`, `COMPLETED`, `REVIEW_PENDING`, `CANCELLED`)
@@ -132,9 +140,11 @@ steps:
   - id: plan
     type: agent
     role: planner
-    output_schema: { verdict: [proceed, reject, escalate], scope_contract: object }
+    context: [task_description, worktree_path]
+    output_schema: { verdict: [proceed, reject, escalate], assessment: string, scope_contract: object }
+    approve_resume: execute   # see 01's "Mandatory plan approval" — where an approved plan resumes
     on:
-      proceed:  execute
+      proceed:  REVIEW_PENDING   # mandatory approval gate, not a direct route to execute
       reject:   FAILED
       escalate: REVIEW_PENDING
     on_malformed_output: REVIEW_PENDING

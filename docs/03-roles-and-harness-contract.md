@@ -102,14 +102,39 @@ responsible for:
 
    Concretely: a Coder-role harness is given real file access to the
    Run's worktree (this is *why* these steps declare `worktree_path` in
-   `context:`, unlike Planner/Reviewer, which judge a task description or
-   an already-produced diff and never touch the worktree) and edits files
-   directly, the same way a human would. The conductor never parses a
-   diff out of the harness's own text output — it computes the diff
-   itself deterministically (stage + diff the worktree) after the harness
-   call returns. That's what "the conductor can apply" means in practice:
-   one uniform diff-computation path across every harness, rather than
-   trusting each harness's self-reported patch format.
+   `context:`) and edits files directly, the same way a human would. The
+   conductor never parses a diff out of the harness's own text output —
+   it computes the diff itself deterministically (stage + diff the
+   worktree) after the harness call returns. That's what "the conductor
+   can apply" means in practice: one uniform diff-computation path across
+   every harness, rather than trusting each harness's self-reported patch
+   format.
+
+5. **Enforcing read-only access where a role requires it.** Planner also
+   declares `worktree_path` now (01-run-state-machine.md: it drafts a
+   real plan against the real repository) but must never edit anything —
+   a plan is reviewed as a plan, not as a change already applied.
+   Reviewer still never touches the worktree at all (it judges an
+   already-produced diff).
+
+   Each adapter translates a read-only invocation into its own harness's
+   mechanism: Claude Code's `--permission-mode plan`, Codex's `--sandbox
+   read-only`, Copilot's explicit `--deny-tool write --deny-tool shell`
+   (Copilot has no real sandboxed read-only mode — this is a denylist,
+   only as complete as the tool names enumerated). Necessary, not
+   sufficient: a harness's own claim of read-only isn't something the
+   factory verifies at the source, and a denylist-style implementation
+   can miss a write-capable tool nobody thought to name. So this is
+   backed by the same principle as item 4 above applied to the read
+   path — don't trust a harness's self-report, verify mechanically: a
+   deterministic `git status --porcelain` check against the worktree
+   after every read-only invocation returns, regardless of harness or
+   which flag it was given. Any unexpected write resets the worktree
+   (so it never leaks into what a later Coder-role call sees) and is
+   recorded as a violation rather than silently discarded or silently
+   let through — same spirit as "a harness adapter that can't reliably
+   produce X for its role shouldn't be used for that role," applied here
+   to read-only-ness specifically.
 
 ## Required structured outputs by step type
 
@@ -121,11 +146,17 @@ role.
 **Planner:**
 ```
 verdict: proceed | reject | escalate
+assessment: string       # what the Planner read, what it's proposing, why
 scope_contract:          # required when verdict = proceed
   acceptance_criteria: [...]
   in_scope_paths: [...]
   non_goals: [...]
 ```
+`assessment` is required here, not deferred to the narrative-content
+schema below like the other roles' equivalent — 01-run-state-machine.md's
+mandatory plan-approval gate means a human reads this to decide whether
+to approve, not just a tracker mirror later, so it's part of the routing
+contract itself.
 
 **Coder (initial execution):** a patch/diff in the adapter's normalized
 format. No verdict schema required for the first EXECUTING pass.
@@ -155,18 +186,23 @@ produce for the state machine to decide where to go next (a verdict
 enum, a diff). They are deliberately terse: `dispute` needs reasoning
 text, not a paragraph the router has to parse.
 
-Separately, and not yet built: each role's output should also carry
-structured *narrative* content, meant for a human reading the Run's
-external trace (01-run-state-machine.md's mirrored-transitions note),
-not for routing. Framing, not a finalized schema:
+Separately, and not yet built: each remaining role's output should also
+carry structured *narrative* content, meant for a human reading the
+Run's external trace (01-run-state-machine.md's mirrored-transitions
+note), not for routing. Framing, not a finalized schema:
 
-- **Planner:** assessment of the task, the plan/slices it's broken into,
-  impact analysis (what areas of the codebase/system this touches).
 - **Coder:** assessment of the change, root-cause analysis (when
   responding to a review finding or a failing test), what actually
   changed and why, how to test it.
 - **Reviewer:** similar in spirit — assessment behind each finding, not
   just the finding itself.
+
+Planner's version of this (assessment, plan/slices, impact analysis) is
+no longer deferred — see the required-schema section above, where it's
+now `assessment: string` in the routing contract itself, not narrative
+content added later. The mandatory plan-approval gate is what moved it:
+a human decides off this content directly, so it can't wait for the
+tracking mirror the way Coder/Reviewer's narrative content still can.
 
 This is additive to the routing schemas above, not a replacement — a
 harness adapter would populate both from the same call, same as today's

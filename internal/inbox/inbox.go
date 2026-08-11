@@ -10,6 +10,13 @@
 // Deliberately narrow: this is not a general Runs browser (that's
 // cmd/runsview's job, staying as-is) — just the one thing genuinely
 // blocked on a human, which is what "Inbox" means here.
+//
+// List excludes outcome "proceed" — a routine drafted plan awaiting
+// approval (docs/01's mandatory plan-approval gate) is a different kind
+// of queue from this one's exceptions (escalations, malformed output,
+// budget/harness-limit exhaustion, disputed findings): see
+// ListPendingApprovals and 04-control-plane-mvp-scope.md's "Pending
+// Approvals" section for why they're split rather than merged.
 package inbox
 
 import (
@@ -62,6 +69,24 @@ type PendingRun struct {
 // REVIEW_PENDING (or was cancelled) drops out, with no separate status
 // field to keep in sync.
 func List(ctx context.Context, pool *pgxpool.Pool) ([]PendingRun, error) {
+	return queryPendingRuns(ctx, pool, "latest.outcome IS DISTINCT FROM 'proceed'")
+}
+
+// ListPendingApprovals is List's mirror image — every Run parked at
+// REVIEW_PENDING specifically because a drafted plan is awaiting human
+// approval (outcome "proceed"), docs/01's mandatory plan-approval gate.
+// Same PendingRun shape: FromStep is the planning step that produced the
+// plan, Summary is the same rendered assessment/scope_contract text a
+// human reviews before approving or requesting changes.
+func ListPendingApprovals(ctx context.Context, pool *pgxpool.Pool) ([]PendingRun, error) {
+	return queryPendingRuns(ctx, pool, "latest.outcome = 'proceed'")
+}
+
+// queryPendingRuns is List/ListPendingApprovals' shared query, split only
+// by which side of the outcome = 'proceed' line they want — everything
+// else (latest-transition-per-run, REVIEW_PENDING filter, ordering,
+// Summary rendering) is identical.
+func queryPendingRuns(ctx context.Context, pool *pgxpool.Pool, outcomeFilter string) ([]PendingRun, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT run_id, workflow, from_step, coalesce(step_id, ''), coalesce(attempt_number, 0), occurred_at,
 		       coalesce(outcome, ''), produced
@@ -71,7 +96,7 @@ func List(ctx context.Context, pool *pgxpool.Pool) ([]PendingRun, error) {
 			FROM run_events
 			ORDER BY run_id, occurred_at DESC, id DESC
 		) latest
-		WHERE to_step = 'REVIEW_PENDING'
+		WHERE latest.to_step = 'REVIEW_PENDING' AND `+outcomeFilter+`
 		ORDER BY occurred_at ASC
 	`)
 	if err != nil {

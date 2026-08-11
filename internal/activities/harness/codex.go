@@ -29,19 +29,28 @@ func (codexAdapter) invoke(ctx context.Context, inv invocation) (invocationResul
 	lastMsgFile := filepath.Join(inv.WorktreePath, ".factory-codex-last-message.txt")
 	defer os.Remove(lastMsgFile)
 
+	// workspace-write for a Coder-role call (real edits); read-only for
+	// Planner (doc03: real repo access to draft a plan against, but never
+	// to edit — backed by harness.Invoke's post-call git-status check,
+	// not trusted alone). Reviewer never declares worktree_path at all,
+	// so it never reaches this adapter with a real WorktreePath either
+	// way.
+	sandbox := "workspace-write"
+	if inv.ReadOnly {
+		sandbox = "read-only"
+	}
 	args := []string{
 		"exec",
 		"--json",
-		"--sandbox", "workspace-write",
-		// Planner/Reviewer calls run with a harmless temp-dir cwd (doc03:
-		// they judge a task description or an already-produced diff,
-		// never touch the worktree — see harness.go's hasWorktree check),
-		// which isn't a git repo at all. Codex's own trust check refuses
-		// to run outside one without this flag — found live (Reviewer
-		// role): "Not inside a trusted directory and
-		// --skip-git-repo-check was not specified." Applied
-		// unconditionally, including for Coder-role calls that do run in
-		// a real worktree: the factory's own scope enforcement (doc03's
+		"--sandbox", sandbox,
+		// Reviewer calls run with a harmless temp-dir cwd (doc03: it
+		// judges an already-produced diff, never touches the worktree —
+		// see harness.go's hasWorktree check), which isn't a git repo at
+		// all. Codex's own trust check refuses to run outside one without
+		// this flag — found live (Reviewer role): "Not inside a trusted
+		// directory and --skip-git-repo-check was not specified." Applied
+		// unconditionally, including for Planner/Coder calls that do run
+		// in a real worktree: the factory's own scope enforcement (doc03's
 		// contract) doesn't rely on Codex's own git-trust heuristic, so
 		// there's nothing this bypasses that matters here.
 		"--skip-git-repo-check",

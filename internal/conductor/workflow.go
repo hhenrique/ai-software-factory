@@ -127,11 +127,21 @@ func RunWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 			budgetTokensSpent = make(map[string]int)
 			budgetHistory = make(map[string][]ActivityOutput)
 			harnessTokensSpent = make(map[string]int)
+			var resumeProduced map[string]any
 			if decision.Hint != "" {
 				runContext["human_hint"] = decision.Hint
+				// Persisted on the transition itself, not just merged into
+				// live runContext — doc01's mandatory plan-approval gate
+				// says "the record isn't just 'approved,' it's 'approved,
+				// and here's why'," which is only true if the hint/
+				// justification text actually lands in run_events (what
+				// Inbox/Pending Approvals/Tasks render Summary from), not
+				// just in the resumed step's own prompt.
+				resumeProduced = map[string]any{"human_hint": decision.Hint}
 			}
 			recordT(TransitionEvent{
 				RunID: runID, Workflow: def.Workflow, FromStep: "REVIEW_PENDING", ToStep: decision.ResumeStepID,
+				Produced: resumeProduced,
 			})
 			currentID = decision.ResumeStepID
 			continue

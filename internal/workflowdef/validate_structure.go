@@ -80,6 +80,7 @@ func validateStructure(def *Definition) ValidationErrors {
 			checkTarget(s.ID, fmt.Sprintf("on[%s]", outcome), t.Destination())
 		}
 		checkTarget(s.ID, "on_malformed_output", s.OnMalformedOutput)
+		checkTarget(s.ID, "approve_resume", s.ApproveResume)
 	}
 
 	return errs

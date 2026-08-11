@@ -31,6 +31,15 @@ func (copilotAdapter) invoke(ctx context.Context, inv invocation) (invocationRes
 		"--allow-all",
 		"--output-format", "json",
 	}
+	if inv.ReadOnly {
+		// Copilot has no real sandboxed read-only mode the way Claude
+		// Code's "plan" mode or Codex's --sandbox read-only do — this is
+		// an explicit denylist, only as complete as the tool names
+		// enumerated here, which is exactly why harness.Invoke's post-call
+		// git-status check exists as the real backstop (doc03) rather
+		// than trusting this alone.
+		args = append(args, "--deny-tool", "write", "--deny-tool", "shell")
+	}
 	if inv.Model != "" {
 		args = append(args, "--model", inv.Model)
 	}

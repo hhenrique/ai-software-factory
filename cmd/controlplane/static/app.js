@@ -11,6 +11,7 @@ const VIEWS = {
   workers: { label: "Workers", render: renderWorkers },
   tasks: { label: "Tasks", render: renderTasks },
   inbox: { label: "Inbox", render: renderInbox },
+  pending_approvals: { label: "Pending approvals", render: renderPendingApprovals },
   settings: { label: "Settings", render: renderSettings },
   workflow_v1: { label: "Workflow (v1: vanilla SVG)", render: renderWorkflowV1 },
   workflow_v2: { label: "Workflow (v2: D3 + dagre)", render: renderWorkflowV2 },
@@ -40,10 +41,10 @@ function renderNav() {
     label.textContent = view.label;
     a.appendChild(label);
 
-    if (id === "inbox") {
+    if (id === "inbox" || id === "pending_approvals") {
       const badge = document.createElement("span");
       badge.className = "nav-badge";
-      badge.id = "nav-inbox-badge";
+      badge.id = id === "inbox" ? "nav-inbox-badge" : "nav-pending-approvals-badge";
       badge.style.display = "none";
       a.appendChild(badge);
     }
@@ -52,6 +53,7 @@ function renderNav() {
     list.appendChild(li);
   }
   refreshInboxBadge();
+  refreshPendingApprovalsBadge();
 }
 
 // refreshInboxBadge fetches the current pending-action count for the nav
@@ -75,6 +77,26 @@ async function refreshInboxBadge() {
   // re-rendered the nav (and thus this badge element) while this
   // request was in flight.
   const current = document.getElementById("nav-inbox-badge");
+  if (!current) return;
+  current.textContent = String(count);
+  current.style.display = count > 0 ? "" : "none";
+}
+
+// refreshPendingApprovalsBadge mirrors refreshInboxBadge exactly, one
+// level down (Pending Approvals is the routine-volume counterpart to
+// Inbox's exceptions-only queue — see internal/inbox.ListPendingApprovals'
+// doc comment for why they're separate lists at all).
+async function refreshPendingApprovalsBadge() {
+  const badge = document.getElementById("nav-pending-approvals-badge");
+  if (!badge) return;
+  let pending;
+  try {
+    pending = await apiRequest("/api/pending-approvals");
+  } catch (err) {
+    return;
+  }
+  const count = (pending || []).length;
+  const current = document.getElementById("nav-pending-approvals-badge");
   if (!current) return;
   current.textContent = String(count);
   current.style.display = count > 0 ? "" : "none";
@@ -2050,6 +2072,312 @@ function renderInbox(container) {
 
     row.appendChild(actions);
     return row;
+  }
+
+  refresh();
+}
+
+// ---- pending approvals view ----
+//
+// docs/01's mandatory plan-approval gate: every drafted plan pauses here,
+// unconditionally, for every Workflow — the routine, expected-volume
+// counterpart to Inbox's exceptions-only queue (internal/inbox.
+// ListPendingApprovals' doc comment). Two actions, both requiring a
+// non-empty note — approval isn't a bare click (doc01) — and a redraft is
+// shown diffed against the immediately preceding draft rather than
+// re-rendered whole, so re-reading round N doesn't mean re-reading every
+// round before it.
+
+// lineDiff computes a minimal line-level diff between two texts via a
+// classic LCS dynamic program — deterministic, no vendored library, well
+// within reason for the short plan documents this renders (a handful of
+// KB at most).
+function lineDiff(oldText, newText) {
+  const a = oldText.split("\n");
+  const b = newText.split("\n");
+  const m = a.length;
+  const n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const result = [];
+  let i = 0;
+  let j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) {
+      result.push({ type: "same", text: a[i] });
+      i++; j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      result.push({ type: "remove", text: a[i] });
+      i++;
+    } else {
+      result.push({ type: "add", text: b[j] });
+      j++;
+    }
+  }
+  while (i < m) { result.push({ type: "remove", text: a[i] }); i++; }
+  while (j < n) { result.push({ type: "add", text: b[j] }); j++; }
+  return result;
+}
+
+function renderPendingApprovals(container) {
+  const wrap = document.createElement("div");
+
+  const errorBanner = document.createElement("div");
+  errorBanner.className = "error-banner";
+  errorBanner.style.display = "none";
+  wrap.appendChild(errorBanner);
+
+  function showError(err) {
+    errorBanner.textContent = String(err.message || err);
+    errorBanner.style.display = "block";
+  }
+  function clearError() {
+    errorBanner.style.display = "none";
+  }
+
+  const listCard = document.createElement("div");
+  listCard.className = "card";
+  const header = document.createElement("div");
+  header.className = "card-header";
+  header.innerHTML = `<h2 id="pending-approvals-count">Pending approvals</h2>`;
+  listCard.appendChild(header);
+  const list = document.createElement("div");
+  list.className = "list";
+  listCard.appendChild(list);
+  wrap.appendChild(listCard);
+
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = "Every drafted plan pauses here before a Coder touches any code — not an exception queue " +
+    "like Inbox, the routine path for every Task. Approving or requesting changes both require a note: the point " +
+    "is a human is on record for why, not just that a click happened.";
+  wrap.appendChild(hint);
+
+  container.appendChild(wrap);
+
+  async function refresh() {
+    clearError();
+    let pending;
+    try {
+      pending = await apiRequest("/api/pending-approvals");
+    } catch (err) {
+      showError(err);
+      return;
+    }
+    renderList(pending || []);
+  }
+
+  function renderList(pending) {
+    document.getElementById("pending-approvals-count").textContent =
+      `Pending approvals — ${pending.length} awaiting review`;
+
+    list.innerHTML = "";
+    if (pending.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      empty.textContent = "No plans waiting on approval right now.";
+      list.appendChild(empty);
+      return;
+    }
+
+    for (const item of pending) {
+      list.appendChild(buildApprovalRow(item));
+    }
+  }
+
+  function buildApprovalRow(item) {
+    const row = document.createElement("div");
+    row.className = "list-row";
+
+    const main = document.createElement("div");
+    main.className = "list-row-main";
+    const name = document.createElement("div");
+    name.className = "list-row-name";
+    name.textContent = item.run_id;
+    main.appendChild(name);
+    const meta = document.createElement("div");
+    meta.className = "list-row-meta";
+    meta.textContent = [item.workflow, humanizeAge(item.occurred_at)].join("  ·  ");
+    main.appendChild(meta);
+
+    if (item.summary) {
+      const summary = document.createElement("div");
+      summary.className = "list-row-summary";
+      summary.textContent = item.summary;
+      main.appendChild(summary);
+    }
+
+    row.appendChild(main);
+
+    const actions = document.createElement("div");
+    actions.className = "list-row-actions";
+
+    const detailsBtn = document.createElement("button");
+    detailsBtn.className = "link";
+    detailsBtn.textContent = "Details";
+    detailsBtn.addEventListener("click", () => showRunDetails({
+      run_id: item.run_id,
+      status: "REVIEW_PENDING",
+      workflow: item.workflow,
+    }));
+    actions.appendChild(detailsBtn);
+
+    const reviewBtn = document.createElement("button");
+    reviewBtn.className = "primary";
+    reviewBtn.textContent = "Review";
+    reviewBtn.addEventListener("click", () => {
+      row.replaceWith(buildReviewRow(item));
+    });
+    actions.appendChild(reviewBtn);
+
+    row.appendChild(actions);
+    return row;
+  }
+
+  function buildReviewRow(item) {
+    const row = document.createElement("div");
+    row.className = "list-row list-row-editing";
+
+    const main = document.createElement("div");
+    main.className = "list-row-main";
+    const name = document.createElement("div");
+    name.className = "list-row-name";
+    name.textContent = item.run_id;
+    main.appendChild(name);
+
+    const diffStatus = document.createElement("div");
+    diffStatus.className = "list-row-meta";
+    diffStatus.textContent = "Loading round history…";
+    main.appendChild(diffStatus);
+    loadPlanDiff(item, diffStatus, main);
+
+    const form = document.createElement("div");
+    form.className = "field-stack";
+    form.innerHTML = `
+      <div class="field">
+        <label>Your note <span class="field-help">(required either way — why you're approving, or what needs to change)</span></label>
+        <textarea class="approval-note" rows="3" placeholder="e.g. scope looks right, ship it — or: this misses the auth edge case"></textarea>
+      </div>
+    `;
+    main.appendChild(form);
+    row.appendChild(main);
+
+    const noteInput = form.querySelector(".approval-note");
+
+    const actions = document.createElement("div");
+    actions.className = "list-row-actions";
+
+    const approveBtn = document.createElement("button");
+    approveBtn.className = "primary";
+    approveBtn.textContent = "Approve";
+    approveBtn.disabled = true;
+    actions.appendChild(approveBtn);
+
+    const requestChangesBtn = document.createElement("button");
+    requestChangesBtn.className = "link";
+    requestChangesBtn.textContent = "Request changes";
+    requestChangesBtn.disabled = true;
+    actions.appendChild(requestChangesBtn);
+
+    noteInput.addEventListener("input", () => {
+      const hasNote = noteInput.value.trim() !== "";
+      approveBtn.disabled = !hasNote;
+      requestChangesBtn.disabled = !hasNote;
+    });
+
+    approveBtn.addEventListener("click", async () => {
+      clearError();
+      approveBtn.disabled = true;
+      requestChangesBtn.disabled = true;
+      try {
+        await apiRequest("/api/pending-approvals/approve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ run_id: item.run_id, justification: noteInput.value.trim() }),
+        });
+        await refresh();
+        refreshPendingApprovalsBadge();
+        refreshInboxBadge();
+      } catch (err) {
+        showError(err);
+        approveBtn.disabled = false;
+        requestChangesBtn.disabled = false;
+      }
+    });
+
+    requestChangesBtn.addEventListener("click", async () => {
+      clearError();
+      approveBtn.disabled = true;
+      requestChangesBtn.disabled = true;
+      try {
+        await apiRequest("/api/pending-approvals/request-changes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ run_id: item.run_id, hint: noteInput.value.trim() }),
+        });
+        await refresh();
+        refreshPendingApprovalsBadge();
+        refreshInboxBadge();
+      } catch (err) {
+        showError(err);
+        approveBtn.disabled = false;
+        requestChangesBtn.disabled = false;
+      }
+    });
+
+    const dismissBtn = document.createElement("button");
+    dismissBtn.className = "link";
+    dismissBtn.textContent = "Dismiss";
+    dismissBtn.addEventListener("click", () => {
+      row.replaceWith(buildApprovalRow(item));
+    });
+    actions.appendChild(dismissBtn);
+
+    row.appendChild(actions);
+    return row;
+  }
+
+  // loadPlanDiff fetches this Run's full event history (already-existing
+  // GET /api/runs/{run_id}, no new endpoint needed) and, if the planning
+  // step ran more than once (a prior request-changes round), renders a
+  // line diff between the last two drafts — round 1 has nothing to diff
+  // against, so it just confirms there's no prior round. The row's own
+  // current-plan text (item.summary) already shows the latest draft in
+  // full; this is supplementary "what changed since the last note," not
+  // a replacement for it.
+  async function loadPlanDiff(item, statusEl, container) {
+    let events;
+    try {
+      const res = await apiRequest("/api/runs/" + encodeURIComponent(item.run_id));
+      events = res.events || [];
+    } catch (err) {
+      statusEl.textContent = "Could not load round history: " + (err.message || err);
+      return;
+    }
+
+    const rounds = events.filter((ev) => ev.from_step === item.from_step && ev.to_step === "REVIEW_PENDING" && ev.summary);
+    if (rounds.length < 2) {
+      statusEl.textContent = "Round 1 — no earlier draft to diff against.";
+      return;
+    }
+
+    const prev = rounds[rounds.length - 2];
+    const curr = rounds[rounds.length - 1];
+    statusEl.textContent = `Round ${rounds.length} — changed since the previous draft:`;
+
+    const diffBox = document.createElement("div");
+    diffBox.className = "plan-diff";
+    for (const line of lineDiff(prev.summary, curr.summary)) {
+      const lineEl = document.createElement("div");
+      lineEl.className = "plan-diff-line plan-diff-" + line.type;
+      lineEl.textContent = (line.type === "add" ? "+ " : line.type === "remove" ? "- " : "  ") + line.text;
+      diffBox.appendChild(lineEl);
+    }
+    container.appendChild(diffBox);
   }
 
   refresh();

@@ -35,6 +35,12 @@ type invocation struct {
 	Prompt       string
 	Model        string
 	Effort       string // canonical param name; "" if not set
+
+	// ReadOnly is true for a Planner-role call (doc03: real repo access
+	// to draft a plan against, but never to edit). Each adapter
+	// translates this into its own harness's read-only mechanism — not
+	// trusted alone; see harness.Invoke's post-call git-status check.
+	ReadOnly bool
 }
 
 // invocationResult is the normalized output every adapter's invoke
@@ -74,10 +80,10 @@ var adapters = map[string]adapter{
 // For steps with an output_schema (Planner, Reviewer, coder_response),
 // the harness is asked to emit a JSON block matching that shape, which is
 // then parsed — unparseable output is Malformed, never silently retried
-// (doc 03). For steps whose context declares worktree_path (the Coder's
-// execute/revise_verify/revise_review — Planner and Reviewer don't and
-// shouldn't: they judge a task description or an already-produced diff
-// text, never edit files), the harness runs with that as its cwd and gets
+// (doc 03). For steps whose context declares worktree_path (Coder's
+// execute/revise_verify/revise_review, and now Planner's plan — Reviewer
+// still doesn't and shouldn't: it judges an already-produced diff, never
+// touches the worktree), the harness runs with that as its cwd and gets
 // real file access; this Activity computes the resulting diff itself via
 // `git add -A` + `git diff --cached` after the harness runs (doc 03: "the
 // conductor can apply" the diff — there's no separate DAG step for
@@ -86,6 +92,13 @@ var adapters = map[string]adapter{
 // Steps without worktree_path run with a harmless temp-dir cwd and skip
 // diff computation entirely — there's nothing to commit and nothing to
 // look for.
+//
+// A Planner-role call is read-only instead: it gets worktree access to
+// draft a real plan, but never to edit (doc03). Enforced twice — a
+// harness-level flag (each adapter's own translation) as the first line
+// of defense, then a deterministic git-status check after the call
+// returns as the actual verified backstop, since a harness's own
+// read-only claim isn't something this factory verifies at the source.
 func (a *Activities) Invoke(ctx context.Context, in conductor.ActivityInput) (conductor.ActivityOutput, error) {
 	ad, ok := adapters[in.Harness]
 	if !ok {
@@ -98,12 +111,14 @@ func (a *Activities) Invoke(ctx context.Context, in conductor.ActivityInput) (co
 	if !hasWorktree {
 		cwd = os.TempDir()
 	}
+	readOnly := hasWorktree && in.Role == "planner"
 
 	res, err := ad.invoke(ctx, invocation{
 		WorktreePath: cwd,
 		Prompt:       buildPrompt(in, hasWorktree),
 		Model:        in.Model,
 		Effort:       in.Params["effort"],
+		ReadOnly:     readOnly,
 	})
 	if err != nil {
 		return conductor.ActivityOutput{}, fmt.Errorf("harness: invoke: %w", err)
@@ -138,16 +153,34 @@ func (a *Activities) Invoke(ctx context.Context, in conductor.ActivityInput) (co
 		}
 	}
 
-	if hasWorktree && worktreePath != "" {
-		diff, err := commitWorktreeChanges(ctx, worktreePath, in.StepID, in.AttemptNumber)
-		if err != nil {
-			return conductor.ActivityOutput{}, fmt.Errorf("harness: invoke: %w", err)
-		}
-		if diff != "" {
-			if out.Produced == nil {
-				out.Produced = map[string]any{}
+	if hasWorktree {
+		if readOnly {
+			violated, err := enforceReadOnlyWorktree(ctx, worktreePath)
+			if err != nil {
+				return conductor.ActivityOutput{}, fmt.Errorf("harness: invoke: %w", err)
 			}
-			out.Produced["diff"] = diff
+			if violated {
+				if out.Produced == nil {
+					out.Produced = map[string]any{}
+				}
+				// Surfaced to a human reviewing the plan (Pending
+				// Approvals), not just logged — a harness that writes
+				// during a read-only pass is real information about
+				// whether it should keep playing this role at all
+				// (doc03).
+				out.Produced["read_only_violation"] = true
+			}
+		} else {
+			diff, err := commitWorktreeChanges(ctx, worktreePath, in.StepID, in.AttemptNumber)
+			if err != nil {
+				return conductor.ActivityOutput{}, fmt.Errorf("harness: invoke: %w", err)
+			}
+			if diff != "" {
+				if out.Produced == nil {
+					out.Produced = map[string]any{}
+				}
+				out.Produced["diff"] = diff
+			}
 		}
 	}
 

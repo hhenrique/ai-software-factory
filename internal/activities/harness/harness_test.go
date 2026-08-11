@@ -305,6 +305,75 @@ func TestInvokeWithoutWorktreePathSkipsDiffButStillWorks(t *testing.T) {
 	}
 }
 
+// TestInvokePlannerRoleIsReadOnlyAndSkipsDiff is the plan-approval gate's
+// backstop in action (doc03): a Planner-role call gets real worktree
+// access to draft against, but a harness that writes anyway must not
+// have that treated as "the Coder's diff" — this fake CLI's "diff" mode
+// always writes CHANGED.md regardless of role, standing in for a harness
+// that ignored its read-only flag.
+func TestInvokePlannerRoleIsReadOnlyAndSkipsDiff(t *testing.T) {
+	requireGit(t)
+	writeFakeCLI(t, "claude")
+	t.Setenv("FAKE_CLI_MODE", "diff")
+
+	dir := newFixtureWorktree(t)
+	a := &Activities{}
+	out, err := a.Invoke(context.Background(), conductor.ActivityInput{
+		StepID:  "plan",
+		Role:    "planner",
+		Harness: "claude-code",
+		Context: map[string]any{"worktree_path": dir, "task_description": "plan this"},
+	})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if _, ok := out.Produced["diff"]; ok {
+		t.Errorf("Produced should not contain diff for a read-only Planner call, got %+v", out.Produced)
+	}
+	violated, _ := out.Produced["read_only_violation"].(bool)
+	if !violated {
+		t.Errorf("Produced[read_only_violation] = %v, want true — the fake harness wrote a file despite being read-only", out.Produced["read_only_violation"])
+	}
+	if _, err := os.Stat(filepath.Join(dir, "CHANGED.md")); !os.IsNotExist(err) {
+		t.Errorf("CHANGED.md still exists after a read-only call (stat err = %v), want it reset away", err)
+	}
+}
+
+// TestInvokePlannerRolePassesReadOnlyPermissionFlag confirms the harness-
+// level flag translation actually happens, not just the git-status
+// backstop — claude.go's adapter-specific part of doc03's contract.
+func TestInvokePlannerRolePassesReadOnlyPermissionFlag(t *testing.T) {
+	requireGit(t)
+	writeFakeCLI(t, "claude")
+	t.Setenv("FAKE_CLI_MODE", "schema")
+	argvFile := filepath.Join(t.TempDir(), "argv.txt")
+	t.Setenv("FAKE_CLI_ARGV_FILE", argvFile)
+
+	dir := newFixtureWorktree(t)
+	a := &Activities{}
+	if _, err := a.Invoke(context.Background(), conductor.ActivityInput{
+		StepID:       "plan",
+		Role:         "planner",
+		Harness:      "claude-code",
+		Context:      map[string]any{"worktree_path": dir, "task_description": "plan this"},
+		OutputSchema: map[string]any{"verdict": []any{"proceed", "reject", "escalate"}, "scope_contract": "object"},
+	}); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	argv, err := os.ReadFile(argvFile)
+	if err != nil {
+		t.Fatalf("read argv file: %v", err)
+	}
+	got := string(argv)
+	if !strings.Contains(got, "--permission-mode\nplan") {
+		t.Errorf("argv %q missing --permission-mode plan for a read-only Planner call", got)
+	}
+	if strings.Contains(got, "bypassPermissions") {
+		t.Errorf("argv %q should not carry bypassPermissions for a read-only Planner call", got)
+	}
+}
+
 func TestInvokePassesModelAndEffortAsFlags(t *testing.T) {
 	requireGit(t)
 	writeFakeCLI(t, "claude")

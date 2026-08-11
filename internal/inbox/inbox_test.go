@@ -227,6 +227,66 @@ func TestListSurfacesOutcomeAndSummaryFromLatestEvent(t *testing.T) {
 	}
 }
 
+// TestListExcludesPendingApprovalsAndViceVersa is the split docs/01's
+// mandatory plan-approval gate needs: a routine drafted plan (outcome
+// "proceed") must not clutter the Inbox's exceptions-only list, and a
+// real escalation must not show up in the approvals queue. Two direct
+// run_events inserts, no real Temporal execution needed — same hermetic
+// pattern as TestListSurfacesOutcomeAndSummaryFromLatestEvent.
+func TestListExcludesPendingApprovalsAndViceVersa(t *testing.T) {
+	pool := requirePool(t)
+	ctx := context.Background()
+
+	approvalRunID := "inbox-split-approval-" + time.Now().Format(time.RFC3339Nano)
+	escalationRunID := "inbox-split-escalation-" + time.Now().Format(time.RFC3339Nano)
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM run_events WHERE run_id = $1 OR run_id = $2`, approvalRunID, escalationRunID)
+	})
+
+	insert := func(runID, outcome string) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO run_events (run_id, workflow, from_step, to_step, occurred_at, outcome)
+			VALUES ($1, 'issue-to-pr-claude-only', 'plan', 'REVIEW_PENDING', now(), $2)
+		`, runID, outcome); err != nil {
+			t.Fatalf("insert run_events for %q: %v", runID, err)
+		}
+	}
+	insert(approvalRunID, "proceed")
+	insert(escalationRunID, "escalate")
+
+	contains := func(items []PendingRun, runID string) bool {
+		for _, p := range items {
+			if p.RunID == runID {
+				return true
+			}
+		}
+		return false
+	}
+
+	inboxItems, err := List(ctx, pool)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if contains(inboxItems, approvalRunID) {
+		t.Errorf("List (Inbox) included the pending-approval run %q, want it excluded", approvalRunID)
+	}
+	if !contains(inboxItems, escalationRunID) {
+		t.Errorf("List (Inbox) did not include the escalation run %q", escalationRunID)
+	}
+
+	approvalItems, err := ListPendingApprovals(ctx, pool)
+	if err != nil {
+		t.Fatalf("ListPendingApprovals: %v", err)
+	}
+	if !contains(approvalItems, approvalRunID) {
+		t.Errorf("ListPendingApprovals did not include %q", approvalRunID)
+	}
+	if contains(approvalItems, escalationRunID) {
+		t.Errorf("ListPendingApprovals included the escalation run %q, want it excluded", escalationRunID)
+	}
+}
+
 func TestSignalCancelUnblocksARun(t *testing.T) {
 	pool := requirePool(t)
 	c := requireTemporal(t)

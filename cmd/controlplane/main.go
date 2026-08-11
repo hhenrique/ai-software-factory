@@ -124,6 +124,9 @@ func main() {
 	mux.HandleFunc("GET /api/inbox", listInboxHandler(d))
 	mux.HandleFunc("POST /api/inbox/resume", resumeInboxHandler(d))
 	mux.HandleFunc("POST /api/inbox/cancel", cancelInboxHandler(d))
+	mux.HandleFunc("GET /api/pending-approvals", listPendingApprovalsHandler(d))
+	mux.HandleFunc("POST /api/pending-approvals/approve", approvePendingApprovalHandler(d))
+	mux.HandleFunc("POST /api/pending-approvals/request-changes", requestPlanChangesHandler(d))
 
 	log.Printf("controlplane: listening on %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
@@ -846,6 +849,186 @@ func cancelInboxHandler(d *deps) http.HandlerFunc {
 			return
 		}
 		if err := inbox.SignalCancel(r.Context(), d.temporal, req.RunID); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// pendingApprovalResponse is inbox.PendingRun plus where an approval of
+// it actually resumes to — the Pending Approvals view's own shape,
+// distinct from the Inbox's plain PendingRun because approve, unlike a
+// generic Inbox resume, isn't a human-picked step id (see
+// approvePendingApprovalHandler's doc comment).
+type pendingApprovalResponse struct {
+	inbox.PendingRun
+	ApproveResumeStep string `json:"approve_resume_step,omitempty"`
+}
+
+// listPendingApprovalsHandler backs the Pending Approvals view — every
+// Run parked at REVIEW_PENDING specifically because a drafted plan is
+// awaiting approval (docs/01's mandatory plan-approval gate), split from
+// Inbox's exceptions-only list (see internal/inbox.ListPendingApprovals'
+// doc comment and 04-control-plane-mvp-scope.md's Pending Approvals
+// section for why).
+func listPendingApprovalsHandler(d *deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pending, err := inbox.ListPendingApprovals(r.Context(), d.pool)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		resumeSteps, err := approveResumeSteps(d.workflowsDir)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		resp := make([]pendingApprovalResponse, len(pending))
+		for i, p := range pending {
+			resp[i] = pendingApprovalResponse{PendingRun: p, ApproveResumeStep: resumeSteps[p.Workflow][p.FromStep]}
+		}
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+// approveResumeSteps parses every workflow file once into workflow name
+// -> step id -> Step.ApproveResume — the Workflow Definition's own
+// declaration of where an approved plan resumes (docs/02), so
+// listPendingApprovalsHandler doesn't reparse a file per pending item. A
+// file that fails to parse is skipped here (already surfaced as Invalid
+// by GET /api/workflows) rather than failing this lookup for every other
+// workflow too.
+func approveResumeSteps(dir string) (map[string]map[string]string, error) {
+	files, err := listWorkflowFiles(dir)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]map[string]string, len(files))
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		def, err := workflowdef.Parse(data)
+		if err != nil {
+			continue
+		}
+		steps := make(map[string]string, len(def.Steps))
+		for _, s := range def.Steps {
+			steps[s.ID] = s.ApproveResume
+		}
+		out[def.Workflow] = steps
+	}
+	return out, nil
+}
+
+// findPendingApproval looks up one pending approval by run id — used by
+// both approve and request-changes so neither ever trusts a client-
+// supplied workflow/from_step for a Run that isn't actually (still)
+// sitting in this state (e.g. a stale page, a double-submit, or someone
+// else having already resolved it).
+func findPendingApproval(ctx context.Context, pool *pgxpool.Pool, runID string) (inbox.PendingRun, error) {
+	pending, err := inbox.ListPendingApprovals(ctx, pool)
+	if err != nil {
+		return inbox.PendingRun{}, err
+	}
+	for _, p := range pending {
+		if p.RunID == runID {
+			return p, nil
+		}
+	}
+	return inbox.PendingRun{}, fmt.Errorf("no pending approval found for run %q", runID)
+}
+
+type approvePendingApprovalRequest struct {
+	RunID         string `json:"run_id"`
+	Justification string `json:"justification"`
+}
+
+// approvePendingApprovalHandler resumes at the Workflow Definition's own
+// approve_resume step (docs/01/02) — never a client-supplied
+// resume_step_id. Letting the client name the resume step here would
+// defeat the reason approve_resume exists at all: approving a plan is a
+// yes/no decision, not a "pick the right internal step id" exercise.
+// Justification is required (docs/01: "not a bare click") and checked
+// here too, not just disabled-button-in-the-UI — the record this
+// produces is exactly what makes the plan-approval gate an
+// accountability mechanism rather than a formality.
+func approvePendingApprovalHandler(d *deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req approvePendingApprovalRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "malformed JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.RunID == "" {
+			http.Error(w, "run_id is required", http.StatusBadRequest)
+			return
+		}
+		justification := strings.TrimSpace(req.Justification)
+		if justification == "" {
+			http.Error(w, "justification is required — approval isn't a bare click (docs/01)", http.StatusBadRequest)
+			return
+		}
+
+		item, err := findPendingApproval(r.Context(), d.pool, req.RunID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		resumeSteps, err := approveResumeSteps(d.workflowsDir)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		resumeStep := resumeSteps[item.Workflow][item.FromStep]
+		if resumeStep == "" {
+			http.Error(w, fmt.Sprintf("workflow %q step %q has no approve_resume configured", item.Workflow, item.FromStep), http.StatusConflict)
+			return
+		}
+
+		if err := inbox.SignalResume(r.Context(), d.temporal, req.RunID, resumeStep, "Approved: "+justification); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+type requestPlanChangesRequest struct {
+	RunID string `json:"run_id"`
+	Hint  string `json:"hint"`
+}
+
+// requestPlanChangesHandler resumes at the pending approval's own
+// from_step (the planning step that drafted it) — unlike approve, this
+// direction never needs approve_resume: "send it back to whoever drafted
+// it" is the same target regardless of workflow.
+func requestPlanChangesHandler(d *deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req requestPlanChangesRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "malformed JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.RunID == "" {
+			http.Error(w, "run_id is required", http.StatusBadRequest)
+			return
+		}
+		hint := strings.TrimSpace(req.Hint)
+		if hint == "" {
+			http.Error(w, "hint is required — requesting changes isn't a bare click (docs/01)", http.StatusBadRequest)
+			return
+		}
+
+		item, err := findPendingApproval(r.Context(), d.pool, req.RunID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+
+		if err := inbox.SignalResume(r.Context(), d.temporal, req.RunID, item.FromStep, hint); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
