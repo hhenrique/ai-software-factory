@@ -21,6 +21,37 @@ import (
 // Flags otherwise taken from `codex exec --help` and this machine's own
 // ~/.codex/config.toml (which already has model_reasoning_effort set,
 // confirming that's a real config key, not guessed).
+//
+// Known open issue, deliberately left unfixed (recorded here rather than
+// only in a chat log, per the same "found live" convention as
+// --skip-git-repo-check below): a real Coder-role (execute step) call
+// failed with exit status 1, stderr "Reading additional input from
+// stdin...", no further detail. Investigated, not resolved:
+//
+//   - `codex exec --help` documents this banner as expected, harmless
+//     behavior — "If stdin is piped and a prompt is also provided, stdin
+//     is appended as a `<stdin>` block" — and since this process's stdin
+//     is always non-interactive, every invocation prints it, success or
+//     failure. It is not itself the cause.
+//   - Reproduced this adapter's exact invocation shape live multiple
+//     times (both sandbox modes, a throwaway repo and a real worktree,
+//     the actual failing Task's real prompt text) and every attempt
+//     succeeded. Not a deterministic bug in how args/flags/stdin are
+//     set up here, as far as live reproduction could show.
+//   - An older failed Task's stderr (from before --skip-git-repo-check
+//     existed) shows a different, already-fixed cause with the same
+//     banner: "Not inside a trusted directory and --skip-git-repo-check
+//     was not specified." The still-open failure postdates that fix and
+//     has no comparable follow-up text, so it isn't the same bug.
+//
+// Best current guess: a transient CLI/API hiccup, not a fixable
+// invocation bug — logged here rather than chased further at live API
+// cost without a reproduction. internal/conductor/workflow.go's
+// ActivityOptions sets RetryPolicy: MaximumAttempts: 1 for every
+// Activity, with a comment noting that's "reserved for future
+// infra-transient-failure handling" — if this recurs, a bounded
+// Activity-level retry specifically for harness.invoke (not every
+// Activity) is the natural next step, not another change here.
 type codexAdapter struct{}
 
 func (codexAdapter) invoke(ctx context.Context, inv invocation) (invocationResult, error) {
