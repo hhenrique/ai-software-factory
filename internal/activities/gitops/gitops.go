@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"factory/internal/activities/cmderr"
 	"factory/internal/conductor"
 	"factory/internal/filelock"
 	"factory/internal/repoconfig"
@@ -61,44 +62,44 @@ func (a *Activities) Registrations() map[string]any {
 // than trying to detect and resume a partial prior attempt.
 func (a *Activities) WorktreeCreate(ctx context.Context, in conductor.ActivityInput) (conductor.ActivityOutput, error) {
 	if in.Repo.CloneURL == "" {
-		return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: Repo.CloneURL is empty")
+		return conductor.ActivityOutput{}, fmt.Errorf("Repo.CloneURL is empty")
 	}
 	if in.RunID == "" {
-		return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: RunID is empty")
+		return conductor.ActivityOutput{}, fmt.Errorf("RunID is empty")
 	}
 
 	paths, err := a.Paths.Paths(ctx, in.Repo.Name, in.RunID)
 	if err != nil {
-		return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: %w", err)
+		return conductor.ActivityOutput{}, err
 	}
 
 	if err := os.MkdirAll(filepath.Dir(paths.CloneDir), 0o755); err != nil {
-		return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: mkdir clone parent: %w", err)
+		return conductor.ActivityOutput{}, fmt.Errorf("mkdir clone parent: %w", err)
 	}
 
 	unlock, err := filelock.Lock(paths.CloneDir + ".lock")
 	if err != nil {
-		return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: %w", err)
+		return conductor.ActivityOutput{}, err
 	}
 	defer unlock()
 
 	if _, statErr := os.Stat(paths.CloneDir); os.IsNotExist(statErr) {
 		if err := run(ctx, "git", "init", "--bare", paths.CloneDir); err != nil {
-			return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: init: %w", err)
+			return conductor.ActivityOutput{}, fmt.Errorf("init: %w", err)
 		}
 		if err := run(ctx, "git", "--git-dir="+paths.CloneDir, "remote", "add", "origin", in.Repo.CloneURL); err != nil {
-			return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: remote add: %w", err)
+			return conductor.ActivityOutput{}, fmt.Errorf("remote add: %w", err)
 		}
 		// Scoped on purpose — see the func doc above.
 		if err := run(ctx, "git", "--git-dir="+paths.CloneDir, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
-			return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: configure fetch refspec: %w", err)
+			return conductor.ActivityOutput{}, fmt.Errorf("configure fetch refspec: %w", err)
 		}
 	} else if statErr != nil {
-		return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: stat clone dir: %w", statErr)
+		return conductor.ActivityOutput{}, fmt.Errorf("stat clone dir: %w", statErr)
 	}
 
 	if err := run(ctx, "git", "--git-dir="+paths.CloneDir, "fetch", "--prune", "origin"); err != nil {
-		return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: fetch: %w", err)
+		return conductor.ActivityOutput{}, fmt.Errorf("fetch: %w", err)
 	}
 
 	defaultBranch := in.Repo.DefaultBranch
@@ -108,27 +109,27 @@ func (a *Activities) WorktreeCreate(ctx context.Context, in conductor.ActivityIn
 		// rather than relying on any local ref bookkeeping.
 		out, err := output(ctx, "git", "ls-remote", "--symref", in.Repo.CloneURL, "HEAD")
 		if err != nil {
-			return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: resolve default branch: %w", err)
+			return conductor.ActivityOutput{}, fmt.Errorf("resolve default branch: %w", err)
 		}
 		defaultBranch, err = parseSymrefHEAD(out)
 		if err != nil {
-			return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: %w", err)
+			return conductor.ActivityOutput{}, err
 		}
 	}
 
 	branch := BranchName(in.RunID)
 
 	if err := os.RemoveAll(paths.WorktreeDir); err != nil {
-		return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: clear stale worktree dir: %w", err)
+		return conductor.ActivityOutput{}, fmt.Errorf("clear stale worktree dir: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(paths.WorktreeDir), 0o755); err != nil {
-		return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: mkdir worktree parent: %w", err)
+		return conductor.ActivityOutput{}, fmt.Errorf("mkdir worktree parent: %w", err)
 	}
 	if err := run(ctx, "git", "--git-dir="+paths.CloneDir, "worktree", "prune"); err != nil {
-		return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: worktree prune: %w", err)
+		return conductor.ActivityOutput{}, fmt.Errorf("worktree prune: %w", err)
 	}
 	if err := run(ctx, "git", "--git-dir="+paths.CloneDir, "worktree", "add", "-B", branch, paths.WorktreeDir, "origin/"+defaultBranch); err != nil {
-		return conductor.ActivityOutput{}, fmt.Errorf("gitops: worktree.create: worktree add: %w", err)
+		return conductor.ActivityOutput{}, fmt.Errorf("worktree add: %w", err)
 	}
 
 	return conductor.ActivityOutput{
@@ -189,7 +190,7 @@ func run(ctx context.Context, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return cmderr.Wrap(name+" "+strings.Join(args, " "), err, string(out))
 	}
 	return nil
 }
@@ -198,7 +199,7 @@ func output(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+		return "", cmderr.Wrap(name+" "+strings.Join(args, " "), err, cmderr.Stderr(err))
 	}
 	return string(out), nil
 }

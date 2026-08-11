@@ -5,8 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"os/exec"
+
+	"factory/internal/activities/cmderr"
 )
 
 // copilotAdapter invokes the GitHub Copilot CLI (`copilot`) non-interactively.
@@ -51,7 +52,7 @@ func (copilotAdapter) invoke(ctx context.Context, inv invocation) (invocationRes
 	cmd.Dir = inv.WorktreePath
 	out, err := cmd.Output()
 	if err != nil {
-		return invocationResult{}, fmt.Errorf("copilot: %w: %s", err, stderrOf(err))
+		return invocationResult{}, cmderr.Wrap("copilot", err, cmderr.Stderr(err))
 	}
 
 	return invocationResult{

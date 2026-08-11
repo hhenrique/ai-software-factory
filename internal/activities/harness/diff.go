@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"factory/internal/activities/cmderr"
 )
 
 // commitWorktreeChanges stages and commits whatever the harness changed
@@ -26,7 +28,7 @@ func commitWorktreeChanges(ctx context.Context, worktreePath, stepID string, att
 	diffCmd.Dir = worktreePath
 	diffOut, err := diffCmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("git diff --cached: %w", err)
+		return "", cmderr.Wrap("git diff --cached", err, cmderr.Stderr(err))
 	}
 	if len(diffOut) == 0 {
 		return "", nil
@@ -52,7 +54,7 @@ func enforceReadOnlyWorktree(ctx context.Context, worktreePath string) (violated
 	statusCmd.Dir = worktreePath
 	out, err := statusCmd.Output()
 	if err != nil {
-		return false, fmt.Errorf("git status --porcelain: %w", err)
+		return false, cmderr.Wrap("git status --porcelain", err, cmderr.Stderr(err))
 	}
 	if len(strings.TrimSpace(string(out))) == 0 {
 		return false, nil
@@ -72,7 +74,7 @@ func runGit(ctx context.Context, dir string, args ...string) error {
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return cmderr.Wrap("git "+strings.Join(args, " "), err, string(out))
 	}
 	return nil
 }

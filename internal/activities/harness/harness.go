@@ -102,7 +102,7 @@ var adapters = map[string]adapter{
 func (a *Activities) Invoke(ctx context.Context, in conductor.ActivityInput) (conductor.ActivityOutput, error) {
 	ad, ok := adapters[in.Harness]
 	if !ok {
-		return conductor.ActivityOutput{}, fmt.Errorf("harness: invoke: unknown harness %q", in.Harness)
+		return conductor.ActivityOutput{}, fmt.Errorf("unknown harness %q", in.Harness)
 	}
 
 	worktreePath, hasWorktree := in.Context["worktree_path"].(string)
@@ -121,7 +121,11 @@ func (a *Activities) Invoke(ctx context.Context, in conductor.ActivityInput) (co
 		ReadOnly:     readOnly,
 	})
 	if err != nil {
-		return conductor.ActivityOutput{}, fmt.Errorf("harness: invoke: %w", err)
+		// err already names which harness failed and why (each adapter's
+		// own "claude:"/"codex:"/"copilot:" prefix) — no extra "harness:
+		// invoke:" wrapping needed; that would just repeat what the from-
+		// step field already records this Activity as.
+		return conductor.ActivityOutput{}, err
 	}
 
 	out := conductor.ActivityOutput{TokensUsed: res.TokensUsed}
@@ -157,7 +161,7 @@ func (a *Activities) Invoke(ctx context.Context, in conductor.ActivityInput) (co
 		if readOnly {
 			violated, err := enforceReadOnlyWorktree(ctx, worktreePath)
 			if err != nil {
-				return conductor.ActivityOutput{}, fmt.Errorf("harness: invoke: %w", err)
+				return conductor.ActivityOutput{}, err
 			}
 			if violated {
 				if out.Produced == nil {
@@ -173,7 +177,7 @@ func (a *Activities) Invoke(ctx context.Context, in conductor.ActivityInput) (co
 		} else {
 			diff, err := commitWorktreeChanges(ctx, worktreePath, in.StepID, in.AttemptNumber)
 			if err != nil {
-				return conductor.ActivityOutput{}, fmt.Errorf("harness: invoke: %w", err)
+				return conductor.ActivityOutput{}, err
 			}
 			if diff != "" {
 				if out.Produced == nil {

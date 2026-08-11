@@ -48,10 +48,10 @@ func (a *Activities) Registrations() map[string]any {
 func (a *Activities) RunTestsLintBuild(ctx context.Context, in conductor.ActivityInput) (conductor.ActivityOutput, error) {
 	worktreePath, _ := in.Context["worktree_path"].(string)
 	if worktreePath == "" {
-		return conductor.ActivityOutput{}, fmt.Errorf("verify: run.tests_lint_build: worktree_path missing from context")
+		return conductor.ActivityOutput{}, fmt.Errorf("worktree_path missing from context")
 	}
 	if in.Repo.TestCommand == "" {
-		return conductor.ActivityOutput{}, fmt.Errorf("verify: run.tests_lint_build: Repo.TestCommand is empty")
+		return conductor.ActivityOutput{}, fmt.Errorf("Repo.TestCommand is empty")
 	}
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", in.Repo.TestCommand)
@@ -75,7 +75,7 @@ func (a *Activities) RunTestsLintBuild(ctx context.Context, in conductor.Activit
 	if !errors.As(err, &exitErr) {
 		// sh itself couldn't run (not found, permissions, ctx canceled,
 		// ...) — an infra failure, not a legitimate verify result.
-		return conductor.ActivityOutput{}, fmt.Errorf("verify: run.tests_lint_build: %w", err)
+		return conductor.ActivityOutput{}, fmt.Errorf("could not run test command: %w", err)
 	}
 
 	return conductor.ActivityOutput{

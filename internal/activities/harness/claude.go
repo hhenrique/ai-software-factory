@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+
+	"factory/internal/activities/cmderr"
 )
 
 // claudeAdapter invokes the Claude Code CLI (`claude`) non-interactively.
@@ -55,7 +57,7 @@ func (claudeAdapter) invoke(ctx context.Context, inv invocation) (invocationResu
 	cmd.Dir = inv.WorktreePath
 	out, err := cmd.Output()
 	if err != nil {
-		return invocationResult{}, fmt.Errorf("claude: %w: %s", err, stderrOf(err))
+		return invocationResult{}, cmderr.Wrap("claude", err, cmderr.Stderr(err))
 	}
 
 	var res claudeJSONResult
@@ -79,11 +81,4 @@ func (claudeAdapter) invoke(ctx context.Context, inv invocation) (invocationResu
 		TokensUsed: res.Usage.InputTokens + res.Usage.OutputTokens +
 			res.Usage.CacheCreationInputTokens + res.Usage.CacheReadInputTokens,
 	}, nil
-}
-
-func stderrOf(err error) string {
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		return string(exitErr.Stderr)
-	}
-	return ""
 }

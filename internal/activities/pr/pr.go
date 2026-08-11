@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"factory/internal/activities/cmderr"
 	"factory/internal/conductor"
 )
 
@@ -45,20 +46,20 @@ func (a *Activities) Registrations() map[string]any {
 func (a *Activities) CreateAndLink(ctx context.Context, in conductor.ActivityInput) (conductor.ActivityOutput, error) {
 	worktreePath, _ := in.Context["worktree_path"].(string)
 	if worktreePath == "" {
-		return conductor.ActivityOutput{}, fmt.Errorf("pr: create_and_link: worktree_path missing from context")
+		return conductor.ActivityOutput{}, fmt.Errorf("worktree_path missing from context")
 	}
 	branch, _ := in.Context["branch"].(string)
 	if branch == "" {
-		return conductor.ActivityOutput{}, fmt.Errorf("pr: create_and_link: branch missing from context")
+		return conductor.ActivityOutput{}, fmt.Errorf("branch missing from context")
 	}
 
 	if err := pushBranch(ctx, worktreePath, branch); err != nil {
-		return conductor.ActivityOutput{}, fmt.Errorf("pr: create_and_link: %w", err)
+		return conductor.ActivityOutput{}, err
 	}
 
 	prURL, err := createOrFindPR(ctx, worktreePath, branch, in.RunID)
 	if err != nil {
-		return conductor.ActivityOutput{}, fmt.Errorf("pr: create_and_link: %w", err)
+		return conductor.ActivityOutput{}, err
 	}
 
 	return conductor.ActivityOutput{
@@ -111,7 +112,7 @@ func run(ctx context.Context, dir, name string, args ...string) error {
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return cmderr.Wrap(name+" "+strings.Join(args, " "), err, string(out))
 	}
 	return nil
 }
@@ -121,7 +122,7 @@ func output(ctx context.Context, dir, name string, args ...string) (string, erro
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return "", cmderr.Wrap(name+" "+strings.Join(args, " "), err, string(out))
 	}
 	return string(out), nil
 }

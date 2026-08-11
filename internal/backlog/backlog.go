@@ -74,7 +74,7 @@ func (a *Activities) CreateTask(ctx context.Context, in conductor.ActivityInput)
 		`, in.RunID, description).Scan(&taskID)
 	}
 	if err != nil {
-		return conductor.ActivityOutput{}, fmt.Errorf("backlog: create task: %w", err)
+		return conductor.ActivityOutput{}, fmt.Errorf("create task: %w", err)
 	}
 
 	return conductor.ActivityOutput{

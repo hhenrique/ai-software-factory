@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"factory/internal/activities/cmderr"
 )
 
 // codexAdapter invokes the Codex CLI (`codex exec`) non-interactively.
@@ -69,7 +71,7 @@ func (codexAdapter) invoke(ctx context.Context, inv invocation) (invocationResul
 	cmd.Dir = inv.WorktreePath
 	jsonlOut, err := cmd.Output()
 	if err != nil {
-		return invocationResult{}, fmt.Errorf("codex: %w: %s", err, stderrOf(err))
+		return invocationResult{}, cmderr.Wrap("codex", err, cmderr.Stderr(err))
 	}
 
 	finalText, err := os.ReadFile(lastMsgFile)

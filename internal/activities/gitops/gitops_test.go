@@ -231,6 +231,37 @@ func TestWorktreeCreateMissingRunID(t *testing.T) {
 	}
 }
 
+// TestWorktreeCreateGitFailureMessageHasNoRedundantPrefixOrBareExitStatus
+// is a regression guard: a real git-command failure used to surface as
+// "gitops: worktree.create: fetch: exit status 128: fatal: ..." — the
+// package/function self-naming is redundant with the from_step field the
+// control plane already records separately, and the bare exit code adds
+// nothing once real stderr text is right there. Both must be gone from
+// the message; the actual diagnostic (git's own stderr) must still be
+// present.
+func TestWorktreeCreateGitFailureMessageHasNoRedundantPrefixOrBareExitStatus(t *testing.T) {
+	requireGit(t)
+	activities := &Activities{Paths: testProvider{root: t.TempDir()}}
+
+	_, err := activities.WorktreeCreate(context.Background(), conductor.ActivityInput{
+		RunID: "run-1",
+		Repo:  conductor.Repo{Name: "acme", CloneURL: filepath.Join(t.TempDir(), "does-not-exist")},
+	})
+	if err == nil {
+		t.Fatalf("expected an error fetching from a nonexistent clone URL")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "gitops: worktree.create") {
+		t.Errorf("message %q still has the redundant gitops: worktree.create prefix", msg)
+	}
+	if strings.Contains(msg, "exit status") {
+		t.Errorf("message %q still has a bare exit status alongside real stderr text", msg)
+	}
+	if !strings.Contains(strings.ToLower(msg), "fetch") {
+		t.Errorf("message %q lost which git operation failed", msg)
+	}
+}
+
 func TestBranchName(t *testing.T) {
 	if got := BranchName("run-123"); got != "factory/run-123" {
 		t.Errorf("BranchName = %q, want factory/run-123", got)

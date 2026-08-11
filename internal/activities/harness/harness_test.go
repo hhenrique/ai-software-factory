@@ -57,6 +57,10 @@ func TestAdaptersMatchKnownHarnesses(t *testing.T) {
 //   - "malformed": prints a claude-shaped result whose "result" is plain
 //     text, not JSON.
 //   - "error": prints a claude-shaped result with is_error=true.
+//   - "nonzero-exit": the CLI process itself exits 1 with diagnostic text
+//     on stderr, no JSON at all — a real live failure shape, distinct
+//     from "error" above (a well-formed result the CLI chose to report
+//     as failed).
 //
 // Reused across the claude/codex/copilot Invoke tests since they all go
 // through the same normalized invocationResult contract on the way out —
@@ -96,6 +100,14 @@ case "$FAKE_CLI_MODE" in
   error)
     echo '{"is_error":true,"result":"boom","usage":{"input_tokens":1,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}'
     exit 0
+    ;;
+  nonzero-exit)
+    # Mirrors a real live failure: the CLI itself exits nonzero (not a
+    # well-formed is_error:true result) and prints a diagnostic to
+    # stderr — codex once did exactly this with "Reading additional
+    # input from stdin..." on stderr and exit code 1.
+    echo "Reading additional input from stdin..." >&2
+    exit 1
     ;;
 esac
 `
@@ -261,6 +273,37 @@ func TestInvokeHarnessErrorResultIsAnActivityError(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected an error when the harness reports is_error=true")
+	}
+}
+
+// TestInvokeNonzeroExitMessageHasNoRedundantPrefixOrBareExitStatus is the
+// exact case reported live: a real Coder-step failure surfaced to a
+// human as "harness: invoke: codex: exit status 1: Reading additional
+// input from stdin...", tripled by Temporal's own wrapping on top. This
+// tests the part internal/conductor's humanReadableFailureReason doesn't
+// touch — what Invoke itself returns — which must already be just
+// "claude: Reading additional input from stdin...": the harness name
+// (real, disambiguating information — a step could run any of three
+// harnesses), no "harness: invoke:" self-naming (redundant with the
+// from_step field already recorded separately), no bare "exit status 1"
+// once there's real stderr text sitting right next to it.
+func TestInvokeNonzeroExitMessageHasNoRedundantPrefixOrBareExitStatus(t *testing.T) {
+	requireGit(t)
+	writeFakeCLI(t, "claude")
+	t.Setenv("FAKE_CLI_MODE", "nonzero-exit")
+
+	dir := newFixtureWorktree(t)
+	a := &Activities{}
+	_, err := a.Invoke(context.Background(), conductor.ActivityInput{
+		StepID:  "execute",
+		Harness: "claude-code",
+		Context: map[string]any{"worktree_path": dir},
+	})
+	if err == nil {
+		t.Fatalf("expected an error when the harness CLI exits nonzero")
+	}
+	if got, want := err.Error(), "claude: Reading additional input from stdin..."; got != want {
+		t.Errorf("Invoke error = %q, want exactly %q", got, want)
 	}
 }
 
