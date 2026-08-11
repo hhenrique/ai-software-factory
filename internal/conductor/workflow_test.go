@@ -3,6 +3,7 @@ package conductor_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -345,6 +346,56 @@ func TestRunWorkflowRecordsFailedTransitionOnHardActivityError(t *testing.T) {
 	require.Equal(t, "FAILED", last.ToStep)
 	require.Contains(t, last.FailureReason, "permission denied",
 		"the recorded event must carry the actual error text, not just that a failure happened")
+}
+
+// TestRunWorkflowFailureReasonStripsTemporalWrapping is a regression
+// guard for a real failure that reached a human as: `conductor: activity
+// "harness.invoke" for step "execute": activity error (type:
+// harness.invoke, scheduledEventID: 51, startedEventID: 52, identity:
+// ...): harness: invoke: codex: exit status 1: Reading additional input
+// from stdin... (type: wrapError, retryable: true): codex: exit status
+// 1: Reading additional input from stdin... (type: wrapError, retryable:
+// true): exit status 1 (type: ExitError, retryable: true)` — Temporal's
+// own ActivityError preamble plus visibly duplicated text (Temporal's
+// error converter re-serializes each Go-level %w wrap as its own nested
+// ApplicationError). The recorded FailureReason must be just what the
+// Activity function actually returned.
+func TestRunWorkflowFailureReasonStripsTemporalWrapping(t *testing.T) {
+	def := workflowdef.Definition{
+		Workflow: "failure-reason-test",
+		Version:  1,
+		Steps: []workflowdef.Step{
+			{ID: "execute", Type: workflowdef.StepTypeTool, Action: "run.tests_lint_build", Next: "COMPLETED"},
+		},
+	}
+	require.Empty(t, workflowdef.Validate(&def))
+
+	env := newTestEnv(t)
+	// Same shape as internal/activities/harness's real wrap chain:
+	// harness.go wraps codex.go wraps *exec.ExitError.
+	innermost := errors.New("exit status 1")
+	middle := fmt.Errorf("codex: %w: %s", innermost, "Reading additional input from stdin...")
+	outer := fmt.Errorf("harness: invoke: %w", middle)
+	env.OnActivity("run.tests_lint_build", mock.Anything, mock.Anything).
+		Return(conductor.ActivityOutput{}, outer).Once()
+
+	var events []conductor.TransitionEvent
+	env.OnActivity(conductor.RecordEventActivityName, mock.Anything, mock.Anything).
+		Return(func(ctx context.Context, ev conductor.TransitionEvent) error {
+			events = append(events, ev)
+			return nil
+		})
+
+	env.ExecuteWorkflow(conductor.RunWorkflow, conductor.RunInput{Definition: def})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+
+	require.NotEmpty(t, events)
+	last := events[len(events)-1]
+	require.Equal(t, "FAILED", last.ToStep)
+	require.Equal(t, "harness: invoke: codex: exit status 1: Reading additional input from stdin...", last.FailureReason,
+		"FailureReason must be exactly what the Activity function returned — no Temporal preamble, no duplicated text")
 }
 
 func TestRunWorkflowMalformedOutputRouting(t *testing.T) {

@@ -1,6 +1,7 @@
 package conductor
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -303,9 +304,52 @@ func recordTransition(ctx workflow.Context, ev TransitionEvent, sourceRef Source
 func recordFailure(ctx workflow.Context, runID, workflowName, fromStep string, err error, sourceRef SourceRef, runContext map[string]any) (RunResult, error) {
 	recordTransition(ctx, TransitionEvent{
 		RunID: runID, Workflow: workflowName, FromStep: fromStep, ToStep: "FAILED",
-		FailureReason: err.Error(),
+		FailureReason: humanReadableFailureReason(err),
 	}, sourceRef, runContext)
 	return RunResult{}, err
+}
+
+// humanReadableFailureReason extracts the message an Activity function
+// actually returned, discarding every layer Temporal itself adds on top
+// — found live: a real Coder-step failure surfaced to a human as
+// `conductor: activity "harness.invoke" for step "execute": activity
+// error (type: harness.invoke, scheduledEventID: 51, startedEventID: 52,
+// identity: ...): harness: invoke: codex: exit status 1: Reading
+// additional input from stdin... (type: wrapError, retryable: true):
+// codex: exit status 1: Reading additional input from stdin... (type:
+// wrapError, retryable: true): exit status 1 (type: ExitError,
+// retryable: true)` — Temporal's own ActivityError preamble
+// (scheduledEventID/startedEventID/identity mean nothing to a human
+// looking at a failed Task), plus visible duplication: Temporal's error
+// converter walks our error's own Unwrap() chain and re-serializes each
+// Go-level wrap (internal/conductor's own `conductor: activity...: %w`,
+// internal/activities/harness's `harness: invoke: %w`,
+// `codex: %w: %s`) as its own nested ApplicationError, and
+// ApplicationError.Error() recursively appends ": " + cause.Error() at
+// each level even though the outer message already contains that text
+// in full (fmt.Errorf composes eagerly, before Temporal ever sees it).
+//
+// The fix isn't string surgery on that rendering — it's using the SDK's
+// typed accessor instead of the stringified one: errors.As walks the
+// same Unwrap() chain to find the first (outermost) *temporal.
+// ApplicationError, and ApplicationError.Message() returns just e.msg —
+// no recursion into its own cause, no (type:.., retryable:..) suffix.
+// That outermost layer's message is exactly what the Activity function
+// returned (our own composed "harness: invoke: codex: exit status 1:
+// ...", already complete and human-readable on its own). Nothing is
+// actually lost — Temporal's raw history still has every layer for
+// doc04's "full trace/replay per Run" — this is just what a human
+// looking at a failed Task should see first.
+//
+// Falls back to err.Error() for a workflow-logic error that never
+// crossed an Activity boundary (e.g. "no on: mapping for outcome %q") —
+// those are already clean, no Temporal wrapping involved.
+func humanReadableFailureReason(err error) string {
+	var appErr *temporal.ApplicationError
+	if errors.As(err, &appErr) {
+		return appErr.Message()
+	}
+	return err.Error()
 }
 
 // route resolves a step's next destination. Steps with an unconditional
