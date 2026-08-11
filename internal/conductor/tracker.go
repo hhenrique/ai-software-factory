@@ -161,7 +161,7 @@ func FormatEventContent(produced map[string]any) string {
 		writeSection(FormatFindings(findings))
 	}
 	if diff, _ := produced["diff"].(string); diff != "" {
-		files, added, removed := SummarizeDiff(diff)
+		files, added, removed := summarizeDiff(diff)
 		writeSection(fmt.Sprintf("Diff: %d file(s) changed, +%d/-%d lines", files, added, removed))
 	}
 	return b.String()
@@ -249,15 +249,12 @@ func joinStrings(items []any) string {
 	return strings.Join(parts, "; ")
 }
 
-// SummarizeDiff counts files/added/removed lines from a unified diff
-// (originally written for the "diff" context field
-// internal/activities/harness's commitWorktreeChanges produces;
-// internal/activities/pr also uses this for the PR description's
-// changes section, against a freshly computed base...HEAD diff) —
+// summarizeDiff counts files/added/removed lines from the "diff" context
+// field internal/activities/harness's commitWorktreeChanges produces —
 // deliberately just a count, not the full diff text (doc08: "not the
 // full diff dumped into a comment, which is noise for a human skimming
 // an issue thread").
-func SummarizeDiff(diff string) (files, added, removed int) {
+func summarizeDiff(diff string) (files, added, removed int) {
 	for _, line := range strings.Split(diff, "\n") {
 		switch {
 		case strings.HasPrefix(line, "diff --git "):

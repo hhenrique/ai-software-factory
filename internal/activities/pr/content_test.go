@@ -24,17 +24,9 @@ func TestBuildPRContentFullContext(t *testing.T) {
 			},
 		},
 	}
-	diff := strings.Join([]string{
-		"diff --git a/x.go b/x.go",
-		"--- a/x.go",
-		"+++ b/x.go",
-		"@@ -1,1 +1,1 @@",
-		"-old",
-		"+new",
-		"",
-	}, "\n")
+	diffStat := " x.go | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n"
 
-	title, body := buildPRContent(in, diff)
+	title, body := buildPRContent(in, diffStat)
 
 	if title != "Fix the flaky retry loop" {
 		t.Errorf("title = %q, want first line of task_description", title)
@@ -45,10 +37,11 @@ func TestBuildPRContentFullContext(t *testing.T) {
 		"## Intention",
 		"guard with a mutex",
 		"## Changes",
-		"1 file(s) changed, +1/-1 lines.",
+		"x.go | 2 +-",
+		"What changed:",
+		"consider a comment here",
 		"## Risk assessment",
 		"not touching the unrelated backoff timing",
-		"consider a comment here",
 		"## How to test",
 		"make test",
 		"factory/run-1",
@@ -60,6 +53,14 @@ func TestBuildPRContentFullContext(t *testing.T) {
 	// acceptance_criteria isn't repeated under Risk — only non_goals is.
 	if strings.Contains(body, "retries no longer double-count") {
 		t.Errorf("body should not repeat acceptance_criteria under Risk assessment:\n%s", body)
+	}
+	// findings describe what changed, not what's risky — they belong
+	// under Changes only, not repeated under Risk assessment.
+	changesIdx := strings.Index(body, "## Changes")
+	riskIdx := strings.Index(body, "## Risk assessment")
+	findingIdx := strings.Index(body, "consider a comment here")
+	if !(changesIdx < findingIdx && findingIdx < riskIdx) {
+		t.Errorf("expected the finding text between Changes and Risk assessment headers, got body:\n%s", body)
 	}
 }
 

@@ -57,20 +57,22 @@ func (a *Activities) CreateAndLink(ctx context.Context, in conductor.ActivityInp
 		return conductor.ActivityOutput{}, err
 	}
 
-	// The "changes" diff is computed fresh here against the Run's actual
+	// The "changes" stat is computed fresh here against the Run's actual
 	// base, not read from in.Context["diff"] — that field is only the
 	// most recent Coder-role call's own incremental `git diff --cached`
 	// (internal/activities/harness's commitWorktreeChanges), which
 	// understates the PR's real content once there's been more than one
-	// commit (execute, then a verify/review revision). Best-effort: a
-	// diff failure degrades the description, it must never block the
-	// actual push+PR side effect.
-	diff, diffErr := diffAgainstBase(ctx, worktreePath, baseBranch(in))
-	if diffErr != nil {
-		diff = ""
+	// commit (execute, then a verify/review revision). Per-file stat only
+	// (git diff --stat), never the diff content itself — the PR's own
+	// Files Changed tab already has that; duplicating it here is noise.
+	// Best-effort: a stat failure degrades the description, it must never
+	// block the actual push+PR side effect.
+	diffStat, statErr := diffStatAgainstBase(ctx, worktreePath, baseBranch(in))
+	if statErr != nil {
+		diffStat = ""
 	}
 
-	title, body := buildPRContent(in, diff)
+	title, body := buildPRContent(in, diffStat)
 
 	prURL, err := createOrFindPR(ctx, worktreePath, branch, title, body)
 	if err != nil {
@@ -94,15 +96,16 @@ func baseBranch(in conductor.ActivityInput) string {
 	return in.Repo.DefaultBranch
 }
 
-// diffAgainstBase returns the Run branch's full diff since it forked from
+// diffStatAgainstBase returns a per-file +/- breakdown (git's own --stat
+// format) of everything the Run branch has done since it forked from
 // origin/<base> (three-dot: against the merge-base, not base's current
-// tip) — what a human reviewing the PR actually sees, unlike any single
-// commit's own diff.
-func diffAgainstBase(ctx context.Context, worktreePath, base string) (string, error) {
+// tip) — every commit since the fork (execute, plus any verify/review
+// revisions), not just the most recent one.
+func diffStatAgainstBase(ctx context.Context, worktreePath, base string) (string, error) {
 	if base == "" {
 		return "", fmt.Errorf("base branch unknown")
 	}
-	return output(ctx, worktreePath, "git", "diff", "origin/"+base+"...HEAD")
+	return output(ctx, worktreePath, "git", "diff", "--stat", "origin/"+base+"...HEAD")
 }
 
 // pushBranch force-pushes (with lease) rather than a plain fast-forward

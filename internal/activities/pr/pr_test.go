@@ -121,12 +121,12 @@ func TestPushBranchSurvivesLocalHistoryDiverging(t *testing.T) {
 	}
 }
 
-// TestDiffAgainstBaseCoversEveryCommitSinceFork reproduces why
+// TestDiffStatAgainstBaseCoversEveryCommitSinceFork reproduces why
 // CreateAndLink computes this itself instead of reusing
 // in.Context["diff"]: a Run branch with two separate commits (an initial
-// execute, then a revision) must show both in the base...HEAD diff, not
-// just the most recent commit's own incremental diff.
-func TestDiffAgainstBaseCoversEveryCommitSinceFork(t *testing.T) {
+// execute, then a revision) must show both files in the base...HEAD
+// stat, not just the most recent commit's own incremental diff.
+func TestDiffStatAgainstBaseCoversEveryCommitSinceFork(t *testing.T) {
 	requireGit(t)
 
 	remote := t.TempDir()
@@ -156,17 +156,17 @@ func TestDiffAgainstBaseCoversEveryCommitSinceFork(t *testing.T) {
 	runGit(t, work, "add", "b.txt")
 	runGit(t, work, "commit", "-q", "-m", "revise")
 
-	diff, err := diffAgainstBase(context.Background(), work, "main")
+	stat, err := diffStatAgainstBase(context.Background(), work, "main")
 	if err != nil {
-		t.Fatalf("diffAgainstBase: %v", err)
+		t.Fatalf("diffStatAgainstBase: %v", err)
 	}
-	if !strings.Contains(diff, "a.txt") || !strings.Contains(diff, "b.txt") {
-		t.Errorf("diff missing content from one of the two commits since fork:\n%s", diff)
+	if !strings.Contains(stat, "a.txt") || !strings.Contains(stat, "b.txt") {
+		t.Errorf("stat missing one of the two commits since fork:\n%s", stat)
 	}
 }
 
-func TestDiffAgainstBaseEmptyBase(t *testing.T) {
-	if _, err := diffAgainstBase(context.Background(), t.TempDir(), ""); err == nil {
+func TestDiffStatAgainstBaseEmptyBase(t *testing.T) {
+	if _, err := diffStatAgainstBase(context.Background(), t.TempDir(), ""); err == nil {
 		t.Fatalf("expected error for empty base branch")
 	}
 }
