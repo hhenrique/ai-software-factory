@@ -97,14 +97,30 @@ body {
    color: currentColor tracks the sidebar's own muted text color, so it's
    automatically correct in both themes with no separate light/dark
    asset) — the low opacity is what keeps it a watermark, not a "present"
-   background image sitting on top of the nav. Anchored bottom-left,
-   rotated slightly so it leans rather than standing perfectly upright. */
+   background image competing with the nav.
+
+   Sized off height, not width: the base must stay on the floor (bottom:
+   0) and the aspect ratio must stay locked (326:612, the source image's
+   own proportions), so scaling this up to ~75% of the sidebar's height
+   is what actually changes — the resulting width can end up wider than
+   the sidebar itself once scaled this far, deliberately left to bleed
+   past the edges (.sidebar's own overflow: hidden clips it) rather than
+   constraining width and ending up tiny again.
+
+   Horizontal placement is "shifted left," not tilted — no rotation.
+   left: 33.333% + translateX(-50%) is the standard CSS idiom for
+   centering a box's own centerline at a fixed fraction of its
+   container's width regardless of the box's actual (dynamically
+   aspect-ratio-computed) width: translateX(-50%) shifts by half of the
+   element's own rendered width, not a fixed percentage of the
+   container, so this stays centered at exactly 1/3 in no matter how
+   wide the scaled-up lighthouse ends up being. */
 .sidebar::before {
   content: "";
   position: absolute;
-  left: -12%;
+  left: 33.333%;
   bottom: 0;
-  width: 78%;
+  height: 75%;
   aspect-ratio: 326 / 612;
   background-color: currentColor;
   color: var(--color-text-muted);
@@ -115,10 +131,9 @@ body {
   mask-repeat: no-repeat;
   -webkit-mask-size: contain;
   mask-size: contain;
-  -webkit-mask-position: bottom left;
-  mask-position: bottom left;
-  transform: rotate(-7deg);
-  transform-origin: bottom left;
+  -webkit-mask-position: bottom center;
+  mask-position: bottom center;
+  transform: translateX(-50%);
   pointer-events: none;
   z-index: 0;
 }
