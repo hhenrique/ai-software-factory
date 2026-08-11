@@ -68,6 +68,24 @@ function renderNav() {
   }
   refreshInboxBadge();
   refreshPendingApprovalsBadge();
+  updateSidebarWatermarkVisibility();
+}
+
+// updateSidebarWatermarkVisibility hides the lighthouse watermark
+// (app.css's .sidebar::before) once it would no longer have clear room
+// below the nav items — a short viewport otherwise runs the two
+// together instead of the watermark reading as background behind them.
+// Reads the watermark's actual rendered height straight off the
+// pseudo-element via getComputedStyle(el, "::before") rather than
+// duplicating its CSS (height: 75% of the sidebar) as a second
+// computation here that could drift from the real rule.
+function updateSidebarWatermarkVisibility() {
+  const sidebar = document.getElementById("sidebar");
+  const navList = document.getElementById("nav-list");
+  if (!sidebar || !navList) return;
+  const watermarkHeight = parseFloat(getComputedStyle(sidebar, "::before").height) || 0;
+  const navListHeight = navList.getBoundingClientRect().height;
+  sidebar.classList.toggle("watermark-hidden", watermarkHeight <= navListHeight);
 }
 
 // refreshInboxBadge fetches the current pending-action count for the nav
@@ -190,6 +208,10 @@ function setupThemeToggle() {
 }
 
 window.addEventListener("hashchange", renderView);
+// A window resize changes the sidebar's own height (100vh) without going
+// through renderView/renderNav at all, so the watermark-visibility check
+// needs its own listener rather than piggybacking on navigation.
+window.addEventListener("resize", updateSidebarWatermarkVisibility);
 window.addEventListener("DOMContentLoaded", () => {
   setupSidebarToggle();
   setupThemeToggle();

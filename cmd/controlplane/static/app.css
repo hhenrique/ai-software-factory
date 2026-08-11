@@ -124,7 +124,7 @@ body {
   aspect-ratio: 326 / 612;
   background-color: currentColor;
   color: var(--color-text-muted);
-  opacity: 0.09;
+  opacity: 0.25;
   -webkit-mask-image: url("/images/lighthouse-watermark.png");
   mask-image: url("/images/lighthouse-watermark.png");
   -webkit-mask-repeat: no-repeat;
@@ -138,7 +138,8 @@ body {
   z-index: 0;
 }
 
-.sidebar.collapsed::before {
+.sidebar.collapsed::before,
+.sidebar.watermark-hidden::before {
   opacity: 0;
 }
 
