@@ -3,15 +3,30 @@
 // is one entry in VIEWS plus one render function, not a rewrite of the
 // shell. Routing is just location.hash -> VIEWS lookup.
 
+// Each icon name matches docs/07-glossary.md's What/How/Who/Where
+// mental-model mapping (Task=what, Workflow=how, Worker=who,
+// Repository=where) — not arbitrary filenames.
 const VIEWS = {
-  tasks: { label: "Tasks", render: renderTasks },
-  workflows: { label: "Workflows", render: renderWorkflows },
-  workers: { label: "Workers", render: renderWorkers },
-  repositories: { label: "Repositories", render: renderRepositories },
-  pending_approvals: { label: "Pending approvals", render: renderPendingApprovals },
-  inbox: { label: "Inbox", render: renderInbox },
-  settings: { label: "Settings", render: renderSettings },
+  tasks: { label: "Tasks", render: renderTasks, icon: "/images/what.svg" },
+  workflows: { label: "Workflows", render: renderWorkflows, icon: "/images/how.svg" },
+  workers: { label: "Workers", render: renderWorkers, icon: "/images/who.svg" },
+  repositories: { label: "Repositories", render: renderRepositories, icon: "/images/where.svg" },
+  pending_approvals: { label: "Pending approvals", render: renderPendingApprovals, icon: "/images/pending-approvals.svg" },
+  inbox: { label: "Inbox", render: renderInbox, icon: "/images/inbox.svg" },
+  settings: { label: "Settings", render: renderSettings, icon: "/images/settings.svg" },
 };
+
+// buildIconSpan renders a themeable icon (app.css's .icon-mask: a CSS
+// mask-image, so the SVG's own fill color is irrelevant — background-
+// color: currentColor makes it track whatever text color already
+// applies, correct in both themes with no separate dark-mode asset).
+function buildIconSpan(src, extraClass) {
+  const span = document.createElement("span");
+  span.className = "icon-mask " + extraClass;
+  span.style.setProperty("--icon-src", `url("${src}")`);
+  span.setAttribute("aria-hidden", "true");
+  return span;
+}
 
 const DEFAULT_VIEW = "repositories";
 
@@ -30,9 +45,15 @@ function renderNav() {
     a.href = "#/" + id;
     a.className = "nav-item" + (id === active ? " active" : "");
 
+    const contentSpan = document.createElement("span");
+    contentSpan.className = "nav-item-content";
+    if (view.icon) {
+      contentSpan.appendChild(buildIconSpan(view.icon, "nav-icon"));
+    }
     const label = document.createElement("span");
     label.textContent = view.label;
-    a.appendChild(label);
+    contentSpan.appendChild(label);
+    a.appendChild(contentSpan);
 
     if (id === "inbox" || id === "pending_approvals") {
       const badge = document.createElement("span");
@@ -118,7 +139,12 @@ function startPolling(fn, ms) {
 function renderView() {
   const id = currentViewID();
   const view = VIEWS[id];
-  document.getElementById("topbar-title").textContent = view.label;
+  const title = document.getElementById("topbar-title");
+  title.innerHTML = "";
+  if (view.icon) {
+    title.appendChild(buildIconSpan(view.icon, "topbar-icon"));
+  }
+  title.appendChild(document.createTextNode(view.label));
   const content = document.getElementById("content");
   stopPolling();
   content.innerHTML = "";

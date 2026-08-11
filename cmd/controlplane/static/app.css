@@ -151,6 +151,49 @@ body {
   overflow: hidden;
 }
 
+/* .nav-item-content wraps the icon+label together so .nav-item's own
+   justify-content: space-between still puts them as one group on the
+   left, the badge (a separate child, when present) on the right —
+   without this wrapper, a 3rd flex child (icon) would get spread across
+   the row by space-between instead of sitting next to its label. */
+.nav-item-content {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.sidebar.collapsed .nav-item-content span:not(.icon-mask) {
+  display: none;
+}
+
+/* .icon-mask: a themeable icon from a plain SVG file, without needing to
+   inline the SVG into the DOM or maintain light/dark variants of each
+   file. mask-image uses only the SVG's alpha channel — its own fill
+   color is irrelevant — so background-color: currentColor makes the
+   icon exactly match whatever text color already applies in context
+   (nav-item's muted/active/hover states, the topbar title), automatically
+   correct in both themes with no separate dark-mode asset or CSS rule. */
+.icon-mask {
+  display: inline-block;
+  flex-shrink: 0;
+  background-color: currentColor;
+  -webkit-mask-image: var(--icon-src);
+  mask-image: var(--icon-src);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+.nav-icon {
+  width: 16px;
+  height: 16px;
+}
+
 .nav-item:hover {
   background: var(--color-surface-raised);
   color: var(--color-text);
@@ -210,9 +253,17 @@ body {
 }
 
 .topbar-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   font-size: 1.1rem;
   font-weight: 600;
   margin: 0;
+}
+
+.topbar-icon {
+  width: 1.2em;
+  height: 1.2em;
 }
 
 .content {
