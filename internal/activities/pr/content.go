@@ -20,8 +20,8 @@ import (
 func buildPRContent(in conductor.ActivityInput, diffStat string) (title, body string) {
 	taskDescription, _ := in.Context["task_description"].(string)
 	assessment, _ := in.Context["assessment"].(string)
+	changeSummary, _ := in.Context["change_summary"].(string)
 	scopeContract, _ := in.Context["scope_contract"].(map[string]any)
-	findings, _ := in.Context["findings"].([]any)
 	branch, _ := in.Context["branch"].(string)
 
 	title = prTitle(taskDescription, in.RunID)
@@ -29,7 +29,7 @@ func buildPRContent(in conductor.ActivityInput, diffStat string) (title, body st
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Overview\n\n%s\n", orFallback(taskDescription, "No task description was recorded for this Run."))
 	fmt.Fprintf(&b, "\n## Intention\n\n%s\n", orFallback(assessment, "No plan assessment was recorded for this Run."))
-	fmt.Fprintf(&b, "\n## Changes\n\n%s\n", changesSummary(diffStat, findings))
+	fmt.Fprintf(&b, "\n## Changes\n\n%s\n", changesSummary(changeSummary, diffStat))
 	fmt.Fprintf(&b, "\n## Risk assessment\n\n%s\n", riskAssessment(scopeContract))
 	fmt.Fprintf(&b, "\n## How to test\n\n%s\n", howToTest(in.Repo.TestCommand, branch))
 	fmt.Fprintf(&b, "\n---\n_Opened automatically by the factory conductor for Run %s._", in.RunID)
@@ -58,23 +58,19 @@ func prTitle(taskDescription, runID string) string {
 	return first
 }
 
-// changesSummary is the per-file breakdown (git's own --stat output,
-// monospaced) plus, when a review happened, the Reviewer's own
-// findings — already a brief, file-referencing description of what
-// changed and why (doc03's findings schema: description + location per
-// item), produced by an agent call this Activity doesn't need to repeat.
-// Reusing it here instead of dumping the diff content itself is Rule 1
-// (don't re-derive/re-render what a prior step already produced) applied
-// to "what changed," not just "how much changed."
-func changesSummary(diffStat string, findings []any) string {
+// changesSummary leads with change_summary — the Coder's own plain-
+// language description of what it did, populated from the same call
+// that produced the diff (execute/revise_verify/revise_review's
+// output_schema; see internal/activities/harness/prompt.go's Coder-role
+// note), not a second call re-reading the diff to describe it (Rule 1).
+// The per-file breakdown (git's own --stat output) trails underneath as
+// scale context, not the primary content — a human wants to know what
+// changed before how many lines it took.
+func changesSummary(changeSummary, diffStat string) string {
 	var b strings.Builder
-	if diffStat == "" {
-		b.WriteString("Diff summary unavailable.")
-	} else {
-		fmt.Fprintf(&b, "```\n%s```", diffStat)
-	}
-	if len(findings) > 0 {
-		fmt.Fprintf(&b, "\n\nWhat changed:\n%s", conductor.FormatFindings(findings))
+	b.WriteString(orFallback(changeSummary, "No change summary was recorded for this Run."))
+	if diffStat != "" {
+		fmt.Fprintf(&b, "\n\n```\n%s```", diffStat)
 	}
 	return b.String()
 }

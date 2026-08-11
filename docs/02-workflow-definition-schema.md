@@ -157,7 +157,9 @@ steps:
     type: agent
     role: coder
     context: [scope_contract]
+    output_schema: { change_summary: string }   # additive to the implicit diff — see 03's Coder schema
     next: verify
+    on_malformed_output: REVIEW_PENDING
 
   - id: verify
     type: tool
@@ -172,7 +174,9 @@ steps:
     type: agent
     role: coder
     context: [scope_contract, failing_tests_diff]
+    output_schema: { change_summary: string }
     next: verify
+    on_malformed_output: REVIEW_PENDING
 
   - id: review
     type: agent
@@ -199,7 +203,9 @@ steps:
   - id: revise_review
     type: agent
     role: coder
+    output_schema: { change_summary: string }
     next: verify
+    on_malformed_output: REVIEW_PENDING
 
   - id: create_pr
     type: tool

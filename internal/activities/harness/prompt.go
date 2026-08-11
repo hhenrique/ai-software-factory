@@ -47,6 +47,28 @@ func buildPrompt(in conductor.ActivityInput, hasWorktree bool) string {
 			"done.\n\n")
 	}
 
+	// Coder-role steps with worktree access (execute/revise_verify/
+	// revise_review — never coder_response, which never touches the
+	// worktree) also declare change_summary in their output_schema now:
+	// the same call that already edits the files is asked to describe
+	// what it did, instead of a second call re-reading the diff it just
+	// made to summarize it after the fact (Rule 1). runContext merges
+	// this key last-write-wins, same as diff/assessment elsewhere, so
+	// this explicitly asks for the *current, full* state of the change
+	// — not just this call's own delta — since a later revision's
+	// change_summary is what a human actually ends up reading if there
+	// were several rounds. Necessary, not sufficient: nothing verifies
+	// the harness actually did that rather than only describing its own
+	// edit, the same "ask nicely, can't enforce" honesty already applied
+	// to read-only enforcement's harness-level flag.
+	if in.Role == "coder" && hasWorktree {
+		b.WriteString("When you finish, include \"change_summary\" in your JSON response: a plain-language " +
+			"description of what this change does and why, covering the diff as a whole (run `git diff` " +
+			"yourself if earlier work in this worktree isn't part of what you just wrote) — not just the " +
+			"specific edit you personally made in this call. This is shown directly to a human reviewing " +
+			"the resulting PR.\n\n")
+	}
+
 	if task, ok := in.Context["task_description"].(string); ok && task != "" {
 		b.WriteString(task)
 		b.WriteString("\n\n")

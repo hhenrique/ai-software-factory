@@ -110,6 +110,34 @@ func TestBuildPromptNonPlannerRoleOmitsAssessmentGuidance(t *testing.T) {
 	}
 }
 
+// TestBuildPromptCoderWithWorktreeGetsChangeSummaryGuidance covers
+// execute/revise_verify/revise_review's actual shape: Coder role, real
+// worktree access.
+func TestBuildPromptCoderWithWorktreeGetsChangeSummaryGuidance(t *testing.T) {
+	p := buildPrompt(conductor.ActivityInput{
+		Role:    "coder",
+		Context: map[string]any{"task_description": "do this", "worktree_path": "/tmp/x"},
+	}, true)
+	if !strings.Contains(p, "change_summary") {
+		t.Errorf("prompt %q missing the change_summary guidance for a Coder call with worktree access", p)
+	}
+}
+
+// TestBuildPromptCoderResponseOmitsChangeSummaryGuidance covers
+// coder_response's actual shape: Coder role, but no worktree access (it
+// judges findings against an already-produced diff, same as Reviewer
+// never touches the worktree) — the guidance only makes sense for a call
+// that can actually run `git diff` itself.
+func TestBuildPromptCoderResponseOmitsChangeSummaryGuidance(t *testing.T) {
+	p := buildPrompt(conductor.ActivityInput{
+		Role:    "coder",
+		Context: map[string]any{"findings": []any{"x"}},
+	}, false)
+	if strings.Contains(p, "change_summary") {
+		t.Errorf("prompt %q should not carry change_summary guidance for a worktree-less Coder call", p)
+	}
+}
+
 // TestBuildPromptSchemaExplanationCoversNestedObjectsAndLists is a
 // regression guard for the other half of the same gap: scope_contract's
 // output_schema used to be a bare `object` placeholder, giving the model

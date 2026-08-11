@@ -34,17 +34,31 @@ func producedFields(s *Step, cfg *validationConfig) []string {
 	case StepTypeTool:
 		return cfg.toolActionProducedFields[s.Action]
 	case StepTypeAgent:
-		if len(s.OutputSchema) > 0 {
-			fields := make([]string, 0, len(s.OutputSchema))
-			for k := range s.OutputSchema {
-				fields = append(fields, k)
-			}
-			return fields
+		fields := make([]string, 0, len(s.OutputSchema)+1)
+		for k := range s.OutputSchema {
+			fields = append(fields, k)
 		}
-		// doc 03's implicit-patch convention: a schema-less agent step
-		// (e.g. Coder's initial EXECUTING pass) still produces a diff.
-		return []string{"diff"}
+		// doc 03's implicit-patch convention: any agent step given real
+		// worktree access (declares worktree_path in its own context:,
+		// the same signal harness.Invoke's hasWorktree uses at runtime)
+		// produces a diff via the deterministic post-call git diff,
+		// independent of whether it also declares an output_schema —
+		// execute/revise_verify/revise_review now declare change_summary
+		// *and* still produce diff, not one or the other.
+		if containsString(s.Context, "worktree_path") {
+			fields = append(fields, "diff")
+		}
+		return fields
 	default:
 		return nil
 	}
+}
+
+func containsString(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }

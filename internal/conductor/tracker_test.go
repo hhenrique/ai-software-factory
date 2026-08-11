@@ -65,6 +65,26 @@ func TestFormatEventContentRationaleFollowsVerdict(t *testing.T) {
 	}
 }
 
+// TestFormatEventContentChangeSummaryLeadsDiffCount covers
+// execute/revise_verify/revise_review's new change_summary field (docs/03:
+// the Coder narrating what it changed, from the same call that produced
+// the diff) — rendered before the bare diff count, same "what/why before
+// the number" ordering assessment/verdict already follow.
+func TestFormatEventContentChangeSummaryLeadsDiffCount(t *testing.T) {
+	got := FormatEventContent(map[string]any{
+		"change_summary": "Added a time-based animation loop for the fixed Voronoi sites.",
+		"diff":           "diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n+added\n",
+	})
+	wantSummary := strings.Index(got, "Changes: Added a time-based animation loop")
+	wantDiff := strings.Index(got, "Diff: 1 file(s) changed")
+	if wantSummary == -1 || wantDiff == -1 {
+		t.Fatalf("FormatEventContent = %q, want both change_summary and the diff count present", got)
+	}
+	if wantSummary > wantDiff {
+		t.Errorf("FormatEventContent = %q, want change_summary before the diff count", got)
+	}
+}
+
 // TestFormatEventContentOmitsAssessmentAndRationaleWhenAbsent guards
 // backward compatibility: a Workflow Definition whose output_schema
 // doesn't declare these fields (or a harness call that omits them) must

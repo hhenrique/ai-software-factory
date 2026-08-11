@@ -15,12 +15,10 @@ func TestBuildPRContentFullContext(t *testing.T) {
 			"task_description": "Fix the flaky retry loop\n\nSee issue #42 for repro steps.",
 			"branch":           "factory/run-1",
 			"assessment":       "The retry loop double-counts attempts under contention; will guard with a mutex.",
+			"change_summary":   "Added a mutex around the attempt counter so concurrent retries can no longer double-increment it.",
 			"scope_contract": map[string]any{
 				"acceptance_criteria": []any{"retries no longer double-count"},
 				"non_goals":           []any{"not touching the unrelated backoff timing"},
-			},
-			"findings": []any{
-				map[string]any{"description": "consider a comment here", "severity": "advisory", "scope_classification": "out_of_scope"},
 			},
 		},
 	}
@@ -37,9 +35,8 @@ func TestBuildPRContentFullContext(t *testing.T) {
 		"## Intention",
 		"guard with a mutex",
 		"## Changes",
+		"Added a mutex around the attempt counter",
 		"x.go | 2 +-",
-		"What changed:",
-		"consider a comment here",
 		"## Risk assessment",
 		"not touching the unrelated backoff timing",
 		"## How to test",
@@ -54,13 +51,14 @@ func TestBuildPRContentFullContext(t *testing.T) {
 	if strings.Contains(body, "retries no longer double-count") {
 		t.Errorf("body should not repeat acceptance_criteria under Risk assessment:\n%s", body)
 	}
-	// findings describe what changed, not what's risky — they belong
-	// under Changes only, not repeated under Risk assessment.
+	// change_summary (what changed) leads, the stat breakdown (how much)
+	// trails underneath it, both within Changes, before Risk assessment.
 	changesIdx := strings.Index(body, "## Changes")
+	summaryIdx := strings.Index(body, "Added a mutex around the attempt counter")
+	statIdx := strings.Index(body, "x.go | 2 +-")
 	riskIdx := strings.Index(body, "## Risk assessment")
-	findingIdx := strings.Index(body, "consider a comment here")
-	if !(changesIdx < findingIdx && findingIdx < riskIdx) {
-		t.Errorf("expected the finding text between Changes and Risk assessment headers, got body:\n%s", body)
+	if !(changesIdx < summaryIdx && summaryIdx < statIdx && statIdx < riskIdx) {
+		t.Errorf("expected change_summary then the stat breakdown between Changes and Risk assessment headers, got body:\n%s", body)
 	}
 }
 
@@ -75,7 +73,7 @@ func TestBuildPRContentEmptyContextFallsBackGracefully(t *testing.T) {
 	for _, want := range []string{
 		"No task description was recorded",
 		"No plan assessment was recorded",
-		"Diff summary unavailable.",
+		"No change summary was recorded",
 		"No risk signals were surfaced",
 		"No test command is configured",
 	} {

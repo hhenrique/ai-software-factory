@@ -28,7 +28,9 @@ steps:
     type: agent
     role: coder
     context: [scope_contract, worktree_path, task_description]
+    output_schema: { change_summary: string }
     next: verify
+    on_malformed_output: REVIEW_PENDING
 
   - id: verify
     type: tool
@@ -43,7 +45,9 @@ steps:
     type: agent
     role: coder
     context: [scope_contract, worktree_path, task_description, failing_tests_diff]
+    output_schema: { change_summary: string }
     next: verify
+    on_malformed_output: REVIEW_PENDING
 
   - id: review
     type: agent
@@ -77,7 +81,9 @@ steps:
     type: agent
     role: coder
     context: [scope_contract, worktree_path]
+    output_schema: { change_summary: string }
     next: verify
+    on_malformed_output: REVIEW_PENDING
 
   - id: create_pr
     type: tool

@@ -100,8 +100,9 @@ func formatTransitionComment(ev TransitionEvent) string {
 }
 
 // FormatEventContent renders a transition's Produced fields (assessment,
-// verdict, rationale, scope_contract, findings, a diff summary) into a
-// compact human-readable block — the same content formatTransitionComment
+// verdict, rationale, scope_contract, findings, change_summary, a diff
+// summary) into a compact human-readable block — the same content
+// formatTransitionComment
 // posts externally (docs/08), exported so a control-plane surface
 // (internal/inbox, internal/backlog) can show the same substance for "why
 // is this Run stuck" without needing Temporal's raw history to find it —
@@ -159,6 +160,14 @@ func FormatEventContent(produced map[string]any) string {
 	}
 	if findings, ok := produced["findings"].([]any); ok && len(findings) > 0 {
 		writeSection(FormatFindings(findings))
+	}
+	// change_summary is execute/revise_verify/revise_review's own
+	// narrative of what they changed and why (docs/03: populated from the
+	// same call that produces the diff, not a second call re-reading it)
+	// — leads the diff count below the same way assessment leads verdict:
+	// what/why before the bare number.
+	if changeSummary, _ := produced["change_summary"].(string); changeSummary != "" {
+		writeSection("Changes: " + changeSummary)
 	}
 	if diff, _ := produced["diff"].(string); diff != "" {
 		files, added, removed := summarizeDiff(diff)

@@ -158,8 +158,17 @@ mandatory plan-approval gate means a human reads this to decide whether
 to approve, not just a tracker mirror later, so it's part of the routing
 contract itself.
 
-**Coder (initial execution):** a patch/diff in the adapter's normalized
-format. No verdict schema required for the first EXECUTING pass.
+**Coder (initial execution, and any REVISING pass — a failing test or a
+review finding):** a patch/diff in the adapter's normalized format, plus
+```
+change_summary: string   # what this changed and why, covering the diff as a whole
+```
+No verdict schema required for these passes — `change_summary` is
+additive, populated from the same call that produces the diff (doc01's
+Rule 1: not a second call re-reading the diff to describe it
+afterward). Unlike Planner's `assessment`, this isn't itself a routing
+field — a step with it still just declares `next:`, never `on:` keyed
+off it.
 
 **Coder (responding to a review finding):**
 ```
@@ -177,6 +186,7 @@ findings:
     scope_classification: in_scope | out_of_scope   # tool-checkable when scope is path-based; agent judgment only for ambiguous boundaries
     severity: blocking | advisory
 verdict: approved | changes_required
+assessment: string   # overall reasoning behind the review as a whole, not any one finding
 ```
 
 ## Near future: structured tracking content per role (not built yet)
@@ -191,26 +201,36 @@ carry structured *narrative* content, meant for a human reading the
 Run's external trace (01-run-state-machine.md's mirrored-transitions
 note), not for routing. Framing, not a finalized schema:
 
-- **Coder:** assessment of the change, root-cause analysis (when
-  responding to a review finding or a failing test), what actually
-  changed and why, how to test it.
+- **Coder:** root-cause analysis (when responding to a review finding or
+  a failing test) and how to test the change are still deferred — "what
+  actually changed and why" is no longer: see `change_summary` in the
+  required-schema section above.
 - **Reviewer:** similar in spirit — assessment behind each finding, not
   just the finding itself.
 
-Planner's version of this (assessment, plan/slices, impact analysis) is
-no longer deferred — see the required-schema section above, where it's
-now `assessment: string` in the routing contract itself, not narrative
-content added later. The mandatory plan-approval gate is what moved it:
-a human decides off this content directly, so it can't wait for the
-tracking mirror the way Coder/Reviewer's narrative content still can.
+Planner's version of this (assessment, plan/slices, impact analysis) and
+Coder's (`change_summary`) are no longer deferred — see the
+required-schema section above. For Planner, the mandatory plan-approval
+gate is what moved it: a human decides off this content directly, so it
+can't wait for the tracking mirror. For Coder, the trigger was narrower
+(01-run-state-machine.md, 04-control-plane-mvp-scope.md: a bare diff
+line-count in an opened PR's description said nothing about what
+actually changed) but the shape is the same — reuse the call that's
+already happening rather than adding a second one to summarize its own
+output after the fact.
 
-This is additive to the routing schemas above, not a replacement — a
-harness adapter would populate both from the same call, same as today's
-`findings`/`verdict` split for the Reviewer. Deferred until the tracking
-mirror itself (08-tracking-integration.md, design decided, not yet
-built) actually exists to consume it — that doc's v1 content uses only
-the routing schemas already defined above; this narrative-content
-schema is its explicitly separable v2.
+What's still deferred for the Reviewer is finer-grained than what's
+built: `assessment` (overall reasoning, already in the routing schema
+above) exists; per-finding rationale — *why* each specific finding was
+raised, not just its description — doesn't yet. Both this and Coder's
+still-deferred root-cause-analysis/how-to-test content are additive to
+the routing schemas above, not a replacement — a harness adapter would
+populate both from the same call, same as today's `findings`/`verdict`
+split. Deferred until the tracking mirror itself
+(08-tracking-integration.md, design decided, not yet built) actually
+exists to consume it — that doc's v1 content uses only the routing
+schemas already defined above; this narrative-content schema is its
+explicitly separable v2.
 
 ## Adding a new harness
 
