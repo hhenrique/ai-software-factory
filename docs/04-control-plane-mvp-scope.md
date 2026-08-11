@@ -43,8 +43,10 @@ there's enough Run volume for them to be meaningful.
 The "Runs blocked on a human" bullet above is built — as its own focused
 view (`cmd/controlplane`'s Inbox section), not as part of a full Overview
 dashboard, which stays unbuilt otherwise. `internal/inbox.List` finds
-every Run whose latest transition landed on `REVIEW_PENDING` (oldest
-first); resume/cancel actions send the real
+every Run whose latest transition landed on `REVIEW_PENDING`, excluding
+outcome `proceed` (oldest first) — those are routine plan approvals,
+split out into their own Pending Approvals queue below, not exceptions;
+resume/cancel actions send the real
 `conductor.HumanDecision` signal (`internal/inbox.SignalResume`/
 `SignalCancel`) — the first caller of that contract from outside the
 process that started the Run. Deliberately narrow, matching this doc's

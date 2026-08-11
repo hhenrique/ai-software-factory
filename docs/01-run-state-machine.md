@@ -338,8 +338,10 @@ issue/PR — not just the internal projection store. The projection store
 remains the source of truth (it's what Overview aggregates from and what
 a Run's trace/replay is built on); the external mirror is for a human
 tracking the work from wherever they already live, not a second store.
-Design decided in 08-tracking-integration.md (adapter shape, where this
-hooks into the conductor, content, failure semantics) — not yet built.
+Design decided and v1 built in 08-tracking-integration.md (adapter
+shape, where this hooks into the conductor, content, failure
+semantics) — GitHub PR/issue comments only; an Aha! adapter and richer
+per-role narrative content are still deferred (that doc's steps 4-5).
 See 03-roles-and-harness-contract.md's matching note on what each role's
 recorded content should actually contain, since "record every
 transition" and "record something worth reading" are different bars.

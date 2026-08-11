@@ -1,17 +1,15 @@
 // Control plane SPA shell. Vanilla JS, no framework/build step — kept
 // simple on purpose (docs/04: thin MVP), but structured so a new section
 // is one entry in VIEWS plus one render function, not a rewrite of the
-// shell. Routing is just location.hash -> VIEWS lookup; there's exactly
-// one view today (repositories), but the registry/render contract is
-// already the shape a second view would follow.
+// shell. Routing is just location.hash -> VIEWS lookup.
 
 const VIEWS = {
-  repositories: { label: "Repositories", render: renderRepositories },
+  tasks: { label: "Tasks", render: renderTasks },
   workflows: { label: "Workflows", render: renderWorkflows },
   workers: { label: "Workers", render: renderWorkers },
-  tasks: { label: "Tasks", render: renderTasks },
-  inbox: { label: "Inbox", render: renderInbox },
+  repositories: { label: "Repositories", render: renderRepositories },
   pending_approvals: { label: "Pending approvals", render: renderPendingApprovals },
+  inbox: { label: "Inbox", render: renderInbox },
   settings: { label: "Settings", render: renderSettings },
 };
 

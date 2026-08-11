@@ -81,12 +81,18 @@ answer → tool. Judgment → agent, and only agent.
   may have multiple Runs (retries are new Runs, not mutations, to
   preserve trace/replay). All state-machine mechanics live at the Run
   level — see 01-run-state-machine.md.
-- **Worker / Role** — a role is a harness + model pair (e.g. Planner =
-  Claude /plan + Sonnet 5 medium; Coder = Codex + a coding model;
-  Reviewer = a review-focused harness + model). Roles are deployment-
-  target-agnostic: the backing model may be a frontier API or a
-  self-hosted local model — the factory does not care which. See
-  03-roles-and-harness-contract.md.
+- **Role** — a named function a step is responsible for (`planner`,
+  `coder`, `reviewer`) — a fixed, closed set, not something a Workflow
+  invents. A step references a role by name only, never a harness/model
+  directly.
+- **Worker** — the persisted `(harness, model, params)` triad a Role is
+  played by (e.g. Planner = Claude /plan + Sonnet 5 medium; Coder =
+  Codex + a coding model; Reviewer = a review-focused harness + model),
+  independent of any Workflow. Which Worker plays which Role for a given
+  Workflow is a separate mapping, edited from the control plane, not a
+  Workflow field. Workers are deployment-target-agnostic: the backing
+  model may be a frontier API or a self-hosted local model — the factory
+  does not care which. See 03-roles-and-harness-contract.md.
 
 ## Explicitly deferred for MVP (do not build these first)
 
