@@ -102,11 +102,32 @@ async function refreshPendingApprovalsBadge() {
   current.style.display = count > 0 ? "" : "none";
 }
 
+// activePollTimer is the one live setInterval at any time — a view that
+// wants auto-refresh calls startPolling from its own render function;
+// renderView clears whatever the previous view left running before
+// rendering the next one, so navigating away always stops it (no
+// stacked, forgotten timers silently piling up requests in the
+// background across view switches).
+let activePollTimer = null;
+
+function stopPolling() {
+  if (activePollTimer) {
+    clearInterval(activePollTimer);
+    activePollTimer = null;
+  }
+}
+
+function startPolling(fn, ms) {
+  stopPolling();
+  activePollTimer = setInterval(fn, ms);
+}
+
 function renderView() {
   const id = currentViewID();
   const view = VIEWS[id];
   document.getElementById("topbar-title").textContent = view.label;
   const content = document.getElementById("content");
+  stopPolling();
   content.innerHTML = "";
   renderNav();
   view.render(content);
@@ -1795,6 +1816,14 @@ function renderTasks(container) {
   });
 
   refresh();
+  // Auto-refresh: a Task's status only ever changes from background Run
+  // activity (a worker process, not this browser tab), so without this a
+  // human has to remember to hit refresh to see it move past QUEUED/
+  // RUNNING. Skipped while any row is mid-edit so a poll tick never wipes
+  // out unsaved input — same guard on every polled view.
+  startPolling(() => {
+    if (!list.querySelector(".list-row-editing")) refresh();
+  }, 5000);
 }
 
 // ---- inbox view ----
@@ -2075,6 +2104,14 @@ function renderInbox(container) {
   }
 
   refresh();
+  // Auto-refresh: a Run parked here got there from background Activity —
+  // an escalation appearing, or one a teammate already resumed/cancelled
+  // from elsewhere — that this browser tab has no way to know about
+  // otherwise. Skipped while a row is mid-edit (resume form open) so a
+  // poll tick never wipes out an unsaved hint.
+  startPolling(() => {
+    if (!list.querySelector(".list-row-editing")) refresh();
+  }, 5000);
 }
 
 // ---- pending approvals view ----
@@ -2381,6 +2418,14 @@ function renderPendingApprovals(container) {
   }
 
   refresh();
+  // Auto-refresh: a plan appearing here, or one a teammate already
+  // approved/sent back from elsewhere, both happen from background Run
+  // activity this browser tab has no other way to learn about. Skipped
+  // while a row is mid-review (note being typed) so a poll tick never
+  // wipes out unsaved input.
+  startPolling(() => {
+    if (!list.querySelector(".list-row-editing")) refresh();
+  }, 5000);
 }
 
 // ---- settings view ----
