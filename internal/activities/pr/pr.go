@@ -57,7 +57,22 @@ func (a *Activities) CreateAndLink(ctx context.Context, in conductor.ActivityInp
 		return conductor.ActivityOutput{}, err
 	}
 
-	prURL, err := createOrFindPR(ctx, worktreePath, branch, in.RunID)
+	// The "changes" diff is computed fresh here against the Run's actual
+	// base, not read from in.Context["diff"] — that field is only the
+	// most recent Coder-role call's own incremental `git diff --cached`
+	// (internal/activities/harness's commitWorktreeChanges), which
+	// understates the PR's real content once there's been more than one
+	// commit (execute, then a verify/review revision). Best-effort: a
+	// diff failure degrades the description, it must never block the
+	// actual push+PR side effect.
+	diff, diffErr := diffAgainstBase(ctx, worktreePath, baseBranch(in))
+	if diffErr != nil {
+		diff = ""
+	}
+
+	title, body := buildPRContent(in, diff)
+
+	prURL, err := createOrFindPR(ctx, worktreePath, branch, title, body)
 	if err != nil {
 		return conductor.ActivityOutput{}, err
 	}
@@ -65,6 +80,29 @@ func (a *Activities) CreateAndLink(ctx context.Context, in conductor.ActivityInp
 	return conductor.ActivityOutput{
 		Produced: map[string]any{"pr_url": prURL},
 	}, nil
+}
+
+// baseBranch prefers the default branch worktree.create already resolved
+// into context (Rule 1: don't re-derive what an earlier step already
+// computed) over in.Repo.DefaultBranch, which is only the Repository's
+// own declared value and may be empty (worktree.create resolves it from
+// origin/HEAD in that case — see gitops.WorktreeCreate).
+func baseBranch(in conductor.ActivityInput) string {
+	if b, _ := in.Context["default_branch"].(string); b != "" {
+		return b
+	}
+	return in.Repo.DefaultBranch
+}
+
+// diffAgainstBase returns the Run branch's full diff since it forked from
+// origin/<base> (three-dot: against the merge-base, not base's current
+// tip) — what a human reviewing the PR actually sees, unlike any single
+// commit's own diff.
+func diffAgainstBase(ctx context.Context, worktreePath, base string) (string, error) {
+	if base == "" {
+		return "", fmt.Errorf("base branch unknown")
+	}
+	return output(ctx, worktreePath, "git", "diff", "origin/"+base+"...HEAD")
 }
 
 // pushBranch force-pushes (with lease) rather than a plain fast-forward
@@ -87,11 +125,11 @@ func pushBranch(ctx context.Context, worktreePath, branch string) error {
 // at-least-once Activity redelivery for the same Run) — returns the
 // existing PR's URL instead of failing. gh reports "already exists" on
 // stderr in that case; there's no structured exit code to key off, so
-// this matches on the message text.
-func createOrFindPR(ctx context.Context, worktreePath, branch, runID string) (string, error) {
-	title := fmt.Sprintf("factory: automated change (run %s)", runID)
-	body := fmt.Sprintf("Opened automatically by the factory conductor for Run %s. Safe to close if this is a test.", runID)
-
+// this matches on the message text. Deliberately does not update an
+// existing PR's title/body on redelivery — CREATE_PR runs once per Run
+// in every reference Workflow Definition, so a redelivery means retrying
+// the same attempt, not a genuinely newer description to apply.
+func createOrFindPR(ctx context.Context, worktreePath, branch, title, body string) (string, error) {
 	out, err := output(ctx, worktreePath, "gh", "pr", "create", "--title", title, "--body", body, "--head", branch)
 	if err == nil {
 		return strings.TrimSpace(out), nil

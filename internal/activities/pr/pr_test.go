@@ -121,6 +121,56 @@ func TestPushBranchSurvivesLocalHistoryDiverging(t *testing.T) {
 	}
 }
 
+// TestDiffAgainstBaseCoversEveryCommitSinceFork reproduces why
+// CreateAndLink computes this itself instead of reusing
+// in.Context["diff"]: a Run branch with two separate commits (an initial
+// execute, then a revision) must show both in the base...HEAD diff, not
+// just the most recent commit's own incremental diff.
+func TestDiffAgainstBaseCoversEveryCommitSinceFork(t *testing.T) {
+	requireGit(t)
+
+	remote := t.TempDir()
+	runGit(t, remote, "init", "-q", "--bare", "-b", "main")
+
+	base := t.TempDir()
+	runGit(t, base, "init", "-q", "-b", "main")
+	runGit(t, base, "remote", "add", "origin", remote)
+	runGit(t, base, "config", "user.email", "test@example.com")
+	runGit(t, base, "config", "user.name", "test")
+	writeFile(t, filepath.Join(base, "f.txt"), "hi\n")
+	runGit(t, base, "add", "f.txt")
+	runGit(t, base, "commit", "-q", "-m", "init")
+	runGit(t, base, "push", "-q", "origin", "main")
+
+	work := t.TempDir()
+	runGit(t, work, "clone", "-q", remote, ".")
+	runGit(t, work, "config", "user.email", "test@example.com")
+	runGit(t, work, "config", "user.name", "test")
+	runGit(t, work, "checkout", "-q", "-b", "factory/run-1", "origin/main")
+
+	writeFile(t, filepath.Join(work, "a.txt"), "first commit\n")
+	runGit(t, work, "add", "a.txt")
+	runGit(t, work, "commit", "-q", "-m", "execute")
+
+	writeFile(t, filepath.Join(work, "b.txt"), "second commit\n")
+	runGit(t, work, "add", "b.txt")
+	runGit(t, work, "commit", "-q", "-m", "revise")
+
+	diff, err := diffAgainstBase(context.Background(), work, "main")
+	if err != nil {
+		t.Fatalf("diffAgainstBase: %v", err)
+	}
+	if !strings.Contains(diff, "a.txt") || !strings.Contains(diff, "b.txt") {
+		t.Errorf("diff missing content from one of the two commits since fork:\n%s", diff)
+	}
+}
+
+func TestDiffAgainstBaseEmptyBase(t *testing.T) {
+	if _, err := diffAgainstBase(context.Background(), t.TempDir(), ""); err == nil {
+		t.Fatalf("expected error for empty base branch")
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)

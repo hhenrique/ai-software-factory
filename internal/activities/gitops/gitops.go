@@ -137,6 +137,13 @@ func (a *Activities) WorktreeCreate(ctx context.Context, in conductor.ActivityIn
 			"worktree_path": paths.WorktreeDir,
 			"branch":        branch,
 			"clone_dir":     paths.CloneDir,
+			// default_branch: resolved once here (Repo.DefaultBranch, or
+			// origin/HEAD when that's empty) so pr.create_and_link can
+			// diff the Run's branch against it later without
+			// re-resolving via another ls-remote call (Rule 1: don't
+			// make a later step re-derive what an earlier one already
+			// computed).
+			"default_branch": defaultBranch,
 		},
 	}, nil
 }

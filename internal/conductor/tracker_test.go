@@ -200,7 +200,7 @@ func TestSummarizeDiffCountsFilesAndLines(t *testing.T) {
 		"",
 	}, "\n")
 
-	files, added, removed := summarizeDiff(diff)
+	files, added, removed := SummarizeDiff(diff)
 	if files != 2 {
 		t.Errorf("files = %d, want 2", files)
 	}

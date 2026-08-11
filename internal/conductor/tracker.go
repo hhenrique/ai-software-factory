@@ -158,10 +158,10 @@ func FormatEventContent(produced map[string]any) string {
 		writeSection(formatScopeContract(sc))
 	}
 	if findings, ok := produced["findings"].([]any); ok && len(findings) > 0 {
-		writeSection(formatFindings(findings))
+		writeSection(FormatFindings(findings))
 	}
 	if diff, _ := produced["diff"].(string); diff != "" {
-		files, added, removed := summarizeDiff(diff)
+		files, added, removed := SummarizeDiff(diff)
 		writeSection(fmt.Sprintf("Diff: %d file(s) changed, +%d/-%d lines", files, added, removed))
 	}
 	return b.String()
@@ -191,7 +191,7 @@ func formatScopeContract(sc map[string]any) string {
 	return b.String()
 }
 
-// formatFindings summarizes a Reviewer's findings (doc03:
+// FormatFindings summarizes a Reviewer's findings (doc03:
 // description/location/scope_classification/severity per finding).
 // Tolerant of a harness that doesn't follow that shape exactly — found
 // live: a real Reviewer call returned {message, severity} instead of
@@ -201,8 +201,10 @@ func formatScopeContract(sc map[string]any) string {
 // this still degrades gracefully rather than rendering an empty
 // "[medium/]  ()" line if a harness ever deviates again). A finding with
 // no usable text at all (neither field present) is dropped rather than
-// rendered as a blank line.
-func formatFindings(findings []any) string {
+// rendered as a blank line. Exported: internal/activities/pr reuses this
+// for the PR description's risk-assessment section rather than
+// re-implementing the same tolerant parsing.
+func FormatFindings(findings []any) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Findings (%d):", len(findings))
 	for _, f := range findings {
@@ -247,12 +249,15 @@ func joinStrings(items []any) string {
 	return strings.Join(parts, "; ")
 }
 
-// summarizeDiff counts files/added/removed lines from a `git diff --cached`
-// unified diff (internal/activities/harness's commitWorktreeChanges is
-// what produces the "diff" context field this reads) — deliberately not
-// the full diff text itself (doc08: "not the full diff dumped into a
-// comment, which is noise for a human skimming an issue thread").
-func summarizeDiff(diff string) (files, added, removed int) {
+// SummarizeDiff counts files/added/removed lines from a unified diff
+// (originally written for the "diff" context field
+// internal/activities/harness's commitWorktreeChanges produces;
+// internal/activities/pr also uses this for the PR description's
+// changes section, against a freshly computed base...HEAD diff) —
+// deliberately just a count, not the full diff text (doc08: "not the
+// full diff dumped into a comment, which is noise for a human skimming
+// an issue thread").
+func SummarizeDiff(diff string) (files, added, removed int) {
 	for _, line := range strings.Split(diff, "\n") {
 		switch {
 		case strings.HasPrefix(line, "diff --git "):
