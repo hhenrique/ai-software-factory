@@ -30,6 +30,23 @@ func buildPrompt(in conductor.ActivityInput, hasWorktree bool) string {
 			"checked-out repository itself as a reason to reject or escalate.\n\n")
 	}
 
+	// Found live: without this, a real Planner call's "assessment" read
+	// like a completion report ("Moved controls...Checks passed.") —
+	// past tense, as if the change and verification already happened —
+	// because a bare `assessment: string` schema entry gives no
+	// indication this runs *before* any of that. A human now reads this
+	// directly to decide whether to approve (01-run-state-machine.md's
+	// mandatory plan-approval gate), so it has to actually describe a
+	// plan, not sound like a change log.
+	if in.Role == "planner" {
+		b.WriteString("You are assessing and planning, not executing. You have not changed any files and no " +
+			"build/test/lint checks have run — that only happens later, after a human approves this plan. " +
+			"Your assessment should describe: what you found relevant to this task while exploring the " +
+			"repository, what you're proposing to change and why, and any risks or tradeoffs a human should " +
+			"weigh before approving. Write it as a forward-looking proposal, not a report of work already " +
+			"done.\n\n")
+	}
+
 	if task, ok := in.Context["task_description"].(string); ok && task != "" {
 		b.WriteString(task)
 		b.WriteString("\n\n")
@@ -79,7 +96,14 @@ func buildPrompt(in conductor.ActivityInput, hasWorktree bool) string {
 			"array of zero or more objects shaped like that example (same field names — do " +
 			"not invent your own), each field value itself following these same rules (so an " +
 			"enum field inside the example is still a single string per object, not an " +
-			"array).\n")
+			"array).\n" +
+			"- An array containing a single bare type name, e.g. [\"string\"], is a LIST: " +
+			"produce a JSON array of zero or more values of that type — e.g. [\"string\"] " +
+			"means a plain array of strings, not an object.\n" +
+			"- A JSON object (not an array) whose values are themselves ENUMs/TYPE " +
+			"PLACEHOLDERs/LISTs/nested objects is a FIELD TEMPLATE: produce a real object " +
+			"with exactly these keys (do not invent your own or omit any), each value " +
+			"following these same rules recursively.\n")
 		b.Write(schemaJSON)
 		b.WriteString("\n")
 	}

@@ -83,3 +83,53 @@ func TestBuildPromptNoWorktreeNoteOmittedWhenWorktreePresent(t *testing.T) {
 		t.Errorf("prompt %q should not carry the no-file-access note when the step has a real worktree", p)
 	}
 }
+
+// TestBuildPromptPlannerRoleGetsForwardLookingAssessmentGuidance is a
+// regression guard: a real Planner call's "assessment" read like a
+// completion report ("Moved controls...Checks passed.") because nothing
+// told the model this runs before any change or check happens. A human
+// now reads this directly to approve or reject (01's mandatory
+// plan-approval gate), so it has to actually read as a plan.
+func TestBuildPromptPlannerRoleGetsForwardLookingAssessmentGuidance(t *testing.T) {
+	p := buildPrompt(conductor.ActivityInput{
+		Role:    "planner",
+		Context: map[string]any{"task_description": "plan this", "worktree_path": "/tmp/x"},
+	}, true)
+	if !strings.Contains(p, "You have not changed any files and no build/test/lint checks have run") {
+		t.Errorf("prompt %q missing the Planner-specific not-yet-executed guidance", p)
+	}
+}
+
+func TestBuildPromptNonPlannerRoleOmitsAssessmentGuidance(t *testing.T) {
+	p := buildPrompt(conductor.ActivityInput{
+		Role:    "coder",
+		Context: map[string]any{"task_description": "do this", "worktree_path": "/tmp/x"},
+	}, true)
+	if strings.Contains(p, "You have not changed any files and no build/test/lint checks have run") {
+		t.Errorf("prompt %q should not carry Planner-specific guidance for a Coder-role call", p)
+	}
+}
+
+// TestBuildPromptSchemaExplanationCoversNestedObjectsAndLists is a
+// regression guard for the other half of the same gap: scope_contract's
+// output_schema used to be a bare `object` placeholder, giving the model
+// no indication it needed acceptance_criteria/in_scope_paths/non_goals
+// keys specifically — it came back empty on a real call. The schema
+// explanation must now cover a nested field template and a typed list.
+func TestBuildPromptSchemaExplanationCoversNestedObjectsAndLists(t *testing.T) {
+	p := buildPrompt(conductor.ActivityInput{
+		Context: map[string]any{"task_description": "plan this"},
+		OutputSchema: map[string]any{
+			"verdict": []any{"proceed", "reject"},
+			"scope_contract": map[string]any{
+				"acceptance_criteria": []any{"string"},
+			},
+		},
+	}, false)
+	if !strings.Contains(p, "FIELD TEMPLATE") {
+		t.Errorf("prompt %q missing the FIELD TEMPLATE rule for a nested object schema value", p)
+	}
+	if !strings.Contains(p, "LIST") {
+		t.Errorf("prompt %q missing the LIST rule for an array-of-type-placeholder schema value", p)
+	}
+}

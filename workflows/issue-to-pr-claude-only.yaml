@@ -29,7 +29,11 @@ steps:
     type: agent
     role: planner
     context: [task_description, worktree_path]
-    output_schema: { verdict: [proceed, reject, escalate], scope_contract: object, assessment: string }
+    output_schema: {
+      verdict: [proceed, reject, escalate],
+      assessment: string,
+      scope_contract: { acceptance_criteria: [string], in_scope_paths: [string], non_goals: [string] },
+    }
     approve_resume: execute   # where an approved plan resumes (docs/01's mandatory plan-approval gate)
     on:
       proceed:  REVIEW_PENDING
